@@ -104,11 +104,15 @@ struct KeyPress {
     is_alt_key_held: bool
 }
 
-trait MainframeProvider {
+trait ReadOnlyMainframeProvider {
     fn get_screen_text(&self) -> &[String];
     fn get_text_at_location(&self, x: u8, y: u8, length: u8) -> String;
+}
+
+trait MainframeProvider: ReadOnlyMainframeProvider {
     fn set_text_at_location(&self, x: u8, y: u8, text: &str) -> ();
     fn send_key_press(&self, key_press: &KeyPress) -> ();
+    fn as_readonly(&self) -> &dyn ReadOnlyMainframeProvider;
 }
 
 trait Screen<T: MainframeProvider> {
@@ -165,13 +169,13 @@ impl<'a, T: MainframeProvider> SingleOperationTreeNode<'a, T> {
 }
 
 struct ConditionalOperationTreeNode<'a, T: MainframeProvider> {
-    condition: fn(&'a OperationContext<T>, &'a T) -> bool,
+    condition: fn(&HashMap<String, String>, &dyn ReadOnlyMainframeProvider) -> bool,
     consequent: Box<OperationTreeNode<'a, T>>,
     alternative: Option<Box<OperationTreeNode<'a, T>>>
 }
 
 impl<'a, T: MainframeProvider> ConditionalOperationTreeNode<'a, T> {
-    pub fn new(condition: fn(&'a OperationContext<T>, &'a T) -> bool, consequent: Box<OperationTreeNode<'a, T>>, alternative: Option<Box<OperationTreeNode<'a, T>>>) -> Self {
+    pub fn new(condition: fn(&HashMap<String, String>, &dyn ReadOnlyMainframeProvider) -> bool, consequent: Box<OperationTreeNode<'a, T>>, alternative: Option<Box<OperationTreeNode<'a, T>>>) -> Self {
         ConditionalOperationTreeNode { condition, consequent, alternative }
     }
 }
@@ -183,12 +187,15 @@ enum OperationTreeNode<'a, T: MainframeProvider> {
 
 struct OperationContext<T: MainframeProvider> {
     value_per_variable_name: Rc<RefCell<HashMap<String, String>>>,
-    phantom_mainframe_provider: PhantomData<T>
+    phantom_mainframe_provider: PhantomData<T>,
 }
 
 impl<T: MainframeProvider> OperationContext<T> {
     pub fn new(value_per_variable_name: HashMap<String, String>) -> Self {
-        OperationContext { value_per_variable_name: Rc::new(RefCell::new(value_per_variable_name)), phantom_mainframe_provider: PhantomData }
+        OperationContext {
+            value_per_variable_name: Rc::new(RefCell::new(value_per_variable_name)),
+            phantom_mainframe_provider: PhantomData,
+        }
     }
     pub fn process_operation<'a>(&self, provider: &T, operation: &Operation<'a, T>) {
         match operation {
@@ -235,7 +242,8 @@ impl<T: MainframeProvider> OperationContext<T> {
                     });
                 },
                 OperationTreeNode::Conditional(operation) => {
-                    if (operation.condition)(self, provider) {
+                    let borrowed_value_per_variable_name = self.value_per_variable_name.borrow();
+                    if (operation.condition)(&borrowed_value_per_variable_name, provider as &dyn ReadOnlyMainframeProvider) {
                         current_operation = Some(operation.consequent.as_ref());
                     }
                     else if let Some(operation) = &operation.alternative {
