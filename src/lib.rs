@@ -1,4 +1,6 @@
-use std::{error::Error, collections::{HashSet, HashMap}, marker::PhantomData, cell::RefCell, rc::Rc};
+#![allow(dead_code)]
+
+use std::{collections::HashMap, marker::PhantomData, cell::RefCell, rc::Rc};
 
 enum KeyCode {
     LetterA,
@@ -255,6 +257,42 @@ impl<T: MainframeProvider> OperationContext<T> {
     }
 }
 
-fn main() {
-    println!("Hello, world!");
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestMainframeProvider {
+
+    }
+
+    impl ReadOnlyMainframeProvider for TestMainframeProvider {
+        fn get_screen_text(&self) -> &[String] {
+            todo!()
+        }
+
+        fn get_text_at_location(&self, x: u8, y: u8, length: u8) -> String {
+            todo!()
+        }
+    }
+
+    impl MainframeProvider for TestMainframeProvider {
+        fn set_text_at_location(&self, x: u8, y: u8, text: &str) -> () {
+            todo!()
+        }
+
+        fn send_key_press(&self, key_press: &KeyPress) -> () {
+            todo!()
+        }
+
+        fn as_readonly(&self) -> &dyn ReadOnlyMainframeProvider {
+            self
+        }
+    }
+
+    #[test]
+    fn initialize_context() {
+        let operation_context = OperationContext::<TestMainframeProvider>::new(HashMap::from([
+            (String::from("test"), String::from("something"))
+        ]));
+    }
 }

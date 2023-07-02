@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "Abstraction"
+name = "mainframe_processor"
 version = "0.1.0"
