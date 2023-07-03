@@ -1,12 +1,12 @@
-use std::{net::TcpStream, io::{Write, BufReader}, io::{Error, BufRead}};
+use std::{net::TcpStream, io::{Write, BufReader}, io::BufRead, cell::{RefCell, Cell}, rc::Rc};
 
 static DATA_PREFIX: &str = " data:";
 
 
-trait Command<TOutput> {
-    fn execute(&self, stream: &mut TcpStream, reader: &mut BufReader<TcpStream>) -> Result<TOutput, Error> {
-        let output_message = self.get_output_message();
-        stream.write_all(output_message.as_bytes())?;
+trait CommandBuilder<TOutput> {
+    fn execute(&self, stream: &mut TcpStream, reader: &mut BufReader<TcpStream>) -> Result<TOutput, std::io::Error> {
+        let client_message = self.get_client_message();
+        stream.write_all(client_message.as_bytes())?;
         stream.flush()?;
 
         let mut is_finished_reading = false;
@@ -18,26 +18,57 @@ trait Command<TOutput> {
             if line.starts_with(DATA_PREFIX) {
                 // the line contains data to be processed by the command
                 line = line.replacen(DATA_PREFIX, "", 1);
-                self.process_client_message(line);
+                self.append_client_data_response(line);
             }
             else if !is_status_message_received {
-                self.process_client_status(line);
+                self.set_client_status_response(line);
                 is_status_message_received = true;
             }
             else {
-                self.process_client_conclusion(line);
+                self.set_client_conclusion_response(line);
                 is_finished_reading = true;
             }
         }
         
-        Ok(self.get_output())
+        Ok(self.build())
     }
-    fn get_output_message(&self) -> String;
-    fn process_client_message(&self, message: String);
-    fn process_client_status(&self, status: String);
-    fn process_client_conclusion(&self, conclusion: String);
-    fn get_output(&self) -> TOutput;
+    fn get_client_message(&self) -> String;
+    fn append_client_data_response(&self, message: String);
+    fn set_client_status_response(&self, status: String);
+    fn set_client_conclusion_response(&self, conclusion: String);
+    fn build(&self) -> TOutput;
 }
+
+struct AsciiRclCommand {
+    row: u8,
+    column: u8,
+    length: u8,
+    client_data: Rc<RefCell<Option<String>>>
+}
+
+impl CommandBuilder<String> for AsciiRclCommand {
+    fn get_client_message(&self) -> String {
+        return format!("Ascii({},{},{})", self.row, self.column, self.length);
+    }
+    fn append_client_data_response(&self, data: String) {
+        let client_data: &mut Option<String> = &mut self.client_data.borrow_mut();
+        if client_data.is_some() {
+            panic!("Unexpected additional client data response with \"{}\" while already having \"{}\".", data, client_data.as_ref().unwrap());
+        }
+        *client_data = Some(data);
+    }
+    fn set_client_status_response(&self, status: String) {
+        // NOP
+    }
+    fn set_client_conclusion_response(&self, conclusion: String) {
+        // NOP
+    }
+    fn build(&self) -> String {
+        let client_data: &Option<String> = &self.client_data.borrow();
+        return client_data.as_ref().expect("The client data should have been received from the client.").clone();
+    }
+}
+
 
 struct ClientInterfaceAddress {
     client_address: String,
@@ -73,9 +104,9 @@ impl ClientInterfaceAddress {
 }
 
 impl ClientInterface {
-    fn execute(&mut self, command: impl Command) {
+    fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> TOutput {
         // TODO return?
-        command.execute(&mut self.stream);
+        return command.execute(&mut self.stream, &mut self.reader).expect("The command should execute correctly.");
     }
 
     fn disconnect(&mut self) {
