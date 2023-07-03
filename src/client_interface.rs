@@ -1,19 +1,45 @@
-use std::{net::TcpStream, io::{Write, BufReader}, io::BufRead, cell::{RefCell, Cell}, rc::Rc};
+use std::{net::TcpStream, io::{Write, BufReader}, io::BufRead, cell::{RefCell, Cell}, rc::Rc, process::Child};
 
-static DATA_PREFIX: &str = " data:";
-
+static DATA_PREFIX: &str = "data:";
 
 trait CommandBuilder<TOutput> {
-    fn execute(&self, stream: &mut TcpStream, reader: &mut BufReader<TcpStream>) -> Result<TOutput, std::io::Error> {
+    fn execute(&self, stream: &mut TcpStream) -> Result<TOutput, std::io::Error> {
+
+        // get the client message and prepare to send it
         let client_message = self.get_client_message();
-        stream.write_all(client_message.as_bytes())?;
-        stream.flush()?;
+        let client_message = format!("{}\n", client_message);
+
+        // send the client message to the running/connected program
+        println!("CommandBuilder: execute: sending client message: \"{}\"", &client_message);
+        let write_all_result = stream.write_all(client_message.as_bytes());
+        if let Err(error) = write_all_result {
+            println!("CommandBuilder: execute: write_all: error: {}", error);
+            return Err(error);
+        }
+        let flush_result = stream.flush();
+        if let Err(error) = flush_result {
+            println!("CommandBuilder: execute: flush: error: {}", error);
+            return Err(error);
+        }
+
+        // begin reading the response from the running/connected program
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
 
         let mut is_finished_reading = false;
         let mut is_status_message_received = false;
+        let mut iteration_count = 0;
         while !is_finished_reading {
+            println!("read iteration: {}", iteration_count);
+            iteration_count += 1;
+
             let mut line = String::new();
-            let bytes_count = reader.read_line(&mut line)?;
+            let read_line_result = reader.read_line(&mut line);
+            if let Err(error) = read_line_result {
+                println!("CommandBuilder: execute: read_line: error: {}", error);
+                return Err(error);
+            }
+
+            println!("line: {line}");
 
             if line.starts_with(DATA_PREFIX) {
                 // the line contains data to be processed by the command
@@ -46,6 +72,17 @@ struct GetTextCommand {
     client_data: Rc<RefCell<Option<String>>>
 }
 
+impl GetTextCommand {
+    fn new(row: u8, column: u8, length: u8) -> Self {
+        GetTextCommand {
+            row,
+            column,
+            length,
+            client_data: Rc::new(RefCell::new(None))
+        }
+    }
+}
+
 impl CommandBuilder<String> for GetTextCommand {
     fn get_client_message(&self) -> String {
         format!("Ascii({},{},{})", self.row, self.column, self.length)
@@ -72,14 +109,26 @@ impl CommandBuilder<String> for GetTextCommand {
 struct GetTextRangeCommand {
     row: u8,
     column: u8,
-    width_offset: u8,
-    height_offset: u8,
+    width: u8,
+    height: u8,
     lines: Rc<RefCell<Option<Vec<String>>>>
+}
+
+impl GetTextRangeCommand {
+    fn new(row: u8, column: u8, width: u8, height: u8) -> Self {
+        GetTextRangeCommand {
+            row,
+            column,
+            width,
+            height,
+            lines: Rc::new(RefCell::new(None))
+        }
+    }
 }
 
 impl CommandBuilder<Vec<String>> for GetTextRangeCommand {
     fn get_client_message(&self) -> String {
-        format!("Ascii({},{},{},{})", self.row, self.column, self.width_offset, self.height_offset)
+        format!("Ascii({},{},{},{})", self.row, self.column, self.width - 1, self.height - 1)
     }
     fn append_client_data_response(&self, data: String) {
         if self.lines.borrow().is_none() {
@@ -101,33 +150,18 @@ impl CommandBuilder<Vec<String>> for GetTextRangeCommand {
     }
 }
 
-struct ConnectCommand {
-    host_name: String,
-    is_connected: Rc<RefCell<Option<bool>>>
-}
-
-impl CommandBuilder<bool> for ConnectCommand {
-    fn get_client_message(&self) -> String {
-        format!("Connect({})", self.host_name)
-    }
-    fn append_client_data_response(&self, data: String) {
-        // NOP
-    }
-    fn set_client_status_response(&self, status: String) {
-        // NOP
-    }
-    fn set_client_conclusion_response(&self, conclusion: String) {
-        *self.is_connected.borrow_mut() = Some(conclusion.as_str() == "ok");
-    }
-    fn build(&self) -> bool {
-        let is_connected: &Option<bool> = &self.is_connected.borrow();
-        *is_connected.as_ref().expect("The client response should have contained if it was able to connect.")
-    }
-}
-
 struct MoveCursorCommand {
     row: u8,
     column: u8
+}
+
+impl MoveCursorCommand {
+    fn new(row: u8, column: u8) -> Self {
+        MoveCursorCommand {
+            row,
+            column
+        }
+    }
 }
 
 impl CommandBuilder<()> for MoveCursorCommand {
@@ -149,12 +183,20 @@ impl CommandBuilder<()> for MoveCursorCommand {
 }
 
 struct SetTextCommand {
-    string: String
+    text: String
+}
+
+impl SetTextCommand {
+    fn new<T: Into<String>>(text: T) -> Self {
+        SetTextCommand {
+            text: text.into()
+        }
+    }
 }
 
 impl CommandBuilder<()> for SetTextCommand {
     fn get_client_message(&self) -> String {
-        format!("String(\"{}\")", self.string)
+        format!("String(\"{}\")", self.text)
     }
     fn append_client_data_response(&self, data: String) {
         // NOP
@@ -170,50 +212,276 @@ impl CommandBuilder<()> for SetTextCommand {
     }
 }
 
-
-struct ClientInterfaceAddress {
-    client_address: String,
+enum Keys {
+    Enter,
+    Disconnect,
+    DeleteField,
 }
 
-struct ClientInterface {
-    stream: TcpStream,
-    reader: BufReader<TcpStream>
+struct SendKeysCommand {
+    keys: Keys
 }
 
-impl ClientInterfaceAddress {
-    pub fn new(client_address: String) -> Self {
-        ClientInterfaceAddress {
-            client_address
+impl SendKeysCommand {
+    fn new(keys: Keys) -> Self {
+        SendKeysCommand {
+            keys
         }
     }
 }
 
-impl ClientInterfaceAddress {
-    fn try_connect(&mut self) -> Option<ClientInterface> {
+impl CommandBuilder<()> for SendKeysCommand {
+    fn get_client_message(&self) -> String {
+        String::from(match self.keys {
+            Keys::Enter => "Enter",
+            Keys::Disconnect => "Disconnect",
+            Keys::DeleteField => "DeleteField",
+        })
+    }
+    fn append_client_data_response(&self, data: String) {
+        // NOP
+    }
+    fn set_client_status_response(&self, status: String) {
+        // NOP
+    }
+    fn set_client_conclusion_response(&self, conclusion: String) {
+        // NOP
+    }
+    fn build(&self) -> () {
+        // NOP
+    }
+}
+
+enum WaitFor {
+    InputField,
+    Unlock,
+    NvtMode,
+    Disconnect,
+}
+
+struct WaitCommand {
+    wait_for: WaitFor,
+    is_successful: Rc<RefCell<Option<bool>>>
+}
+
+impl WaitCommand {
+    fn new(wait_for: WaitFor) -> Self {
+        WaitCommand {
+            wait_for,
+            is_successful: Rc::new(RefCell::new(None))
+        }
+    }
+}
+
+impl CommandBuilder<bool> for WaitCommand {
+    fn get_client_message(&self) -> String {
+        let what = match &self.wait_for {
+            WaitFor::InputField => "InputField",
+            WaitFor::Unlock => "Unlock",
+            WaitFor::NvtMode => "NVTMode",
+            WaitFor::Disconnect => "Disconnect",
+        };
+        format!("Wait({})", what)
+    }
+    fn append_client_data_response(&self, data: String) {
+        // NOP
+    }
+    fn set_client_status_response(&self, status: String) {
+        // NOP
+    }
+    fn set_client_conclusion_response(&self, conclusion: String) {
+        *self.is_successful.borrow_mut() = Some(conclusion.as_str() == "ok");
+    }
+    fn build(&self) -> bool {
+        let is_successful: &Option<bool> = &self.is_successful.borrow();
+        *is_successful.as_ref().expect("The client response should have contained if it was successful or not in waiting.")
+    }
+}
+
+struct Client {
+    process: Child
+}
+
+impl Client {
+    fn new(process: Child) -> Self {
+        Client {
+            process
+        }
+    }
+    pub fn kill(&mut self) -> Result<(), std::io::Error> {
+        self.process.kill()
+    }
+}
+
+
+struct ClientAddress {
+    mainframe_address: String,
+    client_address: String
+}
+
+struct ClientInterface {
+    stream: TcpStream,
+    client_address: String
+}
+
+impl ClientAddress {
+    pub fn new<T: Into<String>>(mainframe_address: T, client_port: u16) -> Self {
+        ClientAddress {
+            mainframe_address: mainframe_address.into(),
+            client_address: format!("localhost:{}", client_port)
+        }
+    }
+}
+
+impl ClientAddress {
+    pub fn try_start_client_process(&self) -> Option<Client> {
+        let process_result = std::process::Command::new("x3270")
+            .arg("-scriptport")
+            .arg(&self.client_address)
+            .arg("-model")
+            .arg("3279-4")
+            .arg(&self.mainframe_address)
+            .spawn();
+        match process_result {
+            Ok(process) => {
+                Some(Client { process })
+            },
+            Err(error) => {
+                println!("try_start_client_process: error starting client process with mainframe address {} and client address {} via error: {}", self.mainframe_address, self.client_address, error);
+                None
+            }
+        }
+    }
+    pub fn try_connect_to_client_process(&self) -> Option<ClientInterface> {
         let stream_result = TcpStream::connect(&self.client_address);
         match stream_result {
             Ok(stream) => {
-                let reader = BufReader::new(stream.try_clone().expect("The stream should have been clonable into the reader."));
-                return Some(ClientInterface { stream, reader });
+                Some(ClientInterface {
+                    stream,
+                    client_address: self.client_address.clone()
+                })
             },
             Err(error) => {
-                println!("try_connect: error connecting to {} via error: {}", self.client_address, error);
-                return None;
+                println!("try_connect_to_client_process: error connecting to {} via error: {}", self.mainframe_address, error);
+                None
             }
         }
     }
 }
 
 impl ClientInterface {
-    fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> TOutput {
+    fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> Result<TOutput, std::io::Error> {
         // TODO return?
-        return command.execute(&mut self.stream, &mut self.reader).expect("The command should execute correctly.");
+        return command.execute(&mut self.stream);
     }
-
-    fn disconnect(&mut self) {
+    pub fn get_text(&mut self, row: u8, column: u8, length: u8) -> Result<String, std::io::Error> {
+        let command = GetTextCommand::new(row, column, length);
+        self.execute(command)
+    }
+    pub fn get_text_range(&mut self, row: u8, column: u8, width: u8, height: u8) -> Result<Vec<String>, std::io::Error> {
+        let command = GetTextRangeCommand::new(row, column, width, height);
+        self.execute(command)
+    }
+    pub fn set_text<T: Into<String>>(&mut self, text: T) -> Result<(), std::io::Error> {
+        let command = SetTextCommand::new(text);
+        self.execute(command)
+    }
+    pub fn move_cursor(&mut self, row: u8, column: u8) -> Result<(), std::io::Error> {
+        let command = MoveCursorCommand::new(row, column);
+        self.execute(command)
+    }
+    pub fn send_keys(&mut self, keys: Keys) -> Result<(), std::io::Error> {
+        let command = SendKeysCommand::new(keys);
+        self.execute(command)
+    }
+    pub fn disconnect(&mut self) {
         let shutdown_result = self.stream.shutdown(std::net::Shutdown::Both);
         if let Err(shutdown_error) = shutdown_result {
             println!("Failed to disconnect via shutdown: {}", shutdown_error);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    fn init() {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
+
+    #[test]
+    fn start_client_then_wait_then_kill() {
+        init();
+
+        let client_address = ClientAddress::new("localhost:3270", 3271);
+        
+        // spawn client
+        let client = client_address.try_start_client_process();
+        assert!(client.is_some());
+        let mut client = client.unwrap();
+        
+        // wait a second
+        std::thread::sleep(Duration::from_secs(1));
+
+        // kill client
+        let kill_result = client.kill();
+        assert!(kill_result.is_ok());
+    }
+
+    #[test]
+    fn start_client_then_read_screen_then_kill() {
+        init();
+
+        let client_address = ClientAddress::new("localhost:3270", 3271);
+        
+        // spawn client
+        let client = client_address.try_start_client_process();
+        assert!(client.is_some());
+        let mut client = client.unwrap();
+        
+        // wait a second
+        println!("waiting for client to be ready...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        // create interface
+        let interface = client_address.try_connect_to_client_process();
+
+        if interface.is_none() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+        }
+
+        assert!(interface.is_some());
+        let mut interface = interface.unwrap();
+        
+        let execute_result = interface.get_text_range(0, 0, 24, 80);
+
+        // wait a second
+        println!("waiting after getting text...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        if execute_result.is_err() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+
+            let error = execute_result.err().unwrap();
+            println!("error: {}", error);
+            panic!("Error getting text from screen: {}", error);
+        }
+
+        assert!(execute_result.is_ok());
+        // TODO verify some of the text
+        for line in execute_result.unwrap().iter() {
+            println!("{}", line);
+        }
+
+        // kill client
+        let kill_result = client.kill();
+        assert!(kill_result.is_ok());
     }
 }
