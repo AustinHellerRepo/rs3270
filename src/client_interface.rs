@@ -1,9 +1,380 @@
-use std::{net::TcpStream, io::{Write, BufReader}, io::BufRead, cell::{RefCell, Cell}, rc::Rc, process::Child};
+#![allow(dead_code)]
 
-static DATA_PREFIX: &str = "data:";
+use std::{net::TcpStream, io::{Write, BufReader}, io::BufRead, cell::RefCell, process::Child};
 
-trait CommandBuilder<TOutput> {
-    fn execute(&self, stream: &mut TcpStream) -> Result<TOutput, std::io::Error> {
+macro_rules! command {
+    ($command_name:ty,
+        command: $client_message_block:block) => {
+        paste::paste! {
+            pub struct [<$command_name Command>] {}
+
+            impl [<$command_name Command>] {
+                pub fn new() -> Self {
+                    [<$command_name Command>] {}
+                }
+            }
+
+            impl CommandBuilder<()> for [<$command_name Command>] {
+                fn get_client_message(&self) -> String {
+                    $client_message_block
+                }
+                fn append_client_data_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_status_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_conclusion_response(&self, _: String) {
+                    // NOP
+                }
+                fn build(self) -> () {
+                    // NOP
+                }
+            }
+        }
+    };
+    ($command_name:ty,
+        [$($arg_name:ident: $arg_type:ty),*],
+        command: $client_message_block:block) => {
+        paste::paste! {
+            pub struct [<$command_name Command>] {
+                $(
+                    $arg_name: $arg_type,
+                )*
+            }
+
+            impl [<$command_name Command>] {
+                pub fn new($($arg_name: $arg_type),*) -> Self {
+                    [<$command_name Command>] {
+                        $(
+                            $arg_name,
+                        )*
+                    }
+                }
+            }
+
+            impl CommandBuilder<()> for [<$command_name Command>] {
+                fn get_client_message(&self) -> String {
+                    $(
+                        let $arg_name: &$arg_type = &self.$arg_name;
+                    )*
+                    $client_message_block
+                }
+                fn append_client_data_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_status_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_conclusion_response(&self, _: String) {
+                    // NOP
+                }
+                fn build(self) -> () {
+                    // NOP
+                }
+            }
+        }
+    };
+    ($command_name:ty,
+        [$($arg_name:ident: $arg_type:ty),*],
+        command: $client_message_block:block,
+        output => $return_name:ident: $return_type:ty) => {
+        paste::paste! {
+            pub struct [<$command_name Command>] {
+                $(
+                    $arg_name: $arg_type,
+                )*
+                $return_name: RefCell<Option<$return_type>>
+            }
+
+            impl [<$command_name Command>] {
+                pub fn new($($arg_name: $arg_type),*) -> Self {
+                    [<$command_name Command>] {
+                        $(
+                            $arg_name,
+                        )*
+                        $return_name: RefCell::new(None)
+                    }
+                }
+            }
+
+            impl CommandBuilder<$return_type> for [<$command_name Command>] {
+                fn get_client_message(&self) -> String {
+                    $(
+                        let $arg_name: &$arg_type = &self.$arg_name;
+                    )*
+                    $client_message_block
+                }
+                fn append_client_data_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_status_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_conclusion_response(&self, _: String) {
+                    // NOP
+                }
+                fn build(self) -> $return_type {
+                    let $return_name: Option<$return_type> = self.$return_name.into_inner();
+                    $return_name.unwrap()
+                }
+            }
+        }
+    };
+    ($command_name:ty,
+        [$($arg_name:ident: $arg_type:ty),*],
+        command: $client_message_block:block,
+        output => $return_name:ident: $return_type:ty,
+        data: (
+            $data_name:ident,
+            $data_block:block
+        )) => {
+        paste::paste! {
+            pub struct [<$command_name Command>] {
+                $(
+                    $arg_name: $arg_type,
+                )*
+                $return_name: RefCell<Option<$return_type>>
+            }
+
+            impl [<$command_name Command>] {
+                pub fn new($($arg_name: $arg_type),*) -> Self {
+                    [<$command_name Command>] {
+                        $(
+                            $arg_name,
+                        )*
+                        $return_name: RefCell::new(None)
+                    }
+                }
+            }
+
+            impl CommandBuilder<$return_type> for [<$command_name Command>] {
+                fn get_client_message(&self) -> String {
+                    $(
+                        let $arg_name: &$arg_type = &self.$arg_name;
+                    )*
+                    $client_message_block
+                }
+                fn append_client_data_response(&self, $data_name: String) {
+                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
+                    $data_block
+                }
+                fn set_client_status_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_conclusion_response(&self, _: String) {
+                    // NOP
+                }
+                fn build(self) -> $return_type {
+                    let $return_name: Option<$return_type> = self.$return_name.into_inner();
+                    $return_name.unwrap()
+                }
+            }
+        }
+    };
+    ($command_name:ty,
+        [$($arg_name:ident: $arg_type:ty),*],
+        command: $client_message_block:block,
+        output => $return_name:ident: $return_type:ty,
+        data: (
+            $data_name:ident,
+            $data_block:block
+        ),
+        status: (
+            $status_name:ident,
+            $status_block:block
+        )) => {
+        paste::paste! {
+            pub struct [<$command_name Command>] {
+                $(
+                    $arg_name: $arg_type,
+                )*
+                $return_name: RefCell<Option<$return_type>>
+            }
+
+            impl [<$command_name Command>] {
+                pub fn new($($arg_name: $arg_type),*) -> Self {
+                    [<$command_name Command>] {
+                        $(
+                            $arg_name,
+                        )*
+                        $return_name: RefCell::new(None)
+                    }
+                }
+            }
+
+            impl CommandBuilder<$return_type> for [<$command_name Command>] {
+                fn get_client_message(&self) -> String {
+                    $(
+                        $arg_name: &$arg_type = &self.$arg_name;
+                    )*
+                    $client_message_block
+                }
+                fn append_client_data_response(&self, $data_name: String) {
+                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
+                    $data_block
+                }
+                fn set_client_status_response(&self, $status_name: String) {
+                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
+                    $status_block
+                }
+                fn set_client_conclusion_response(&self, _: String) {
+                    // NOP
+                }
+                fn build(self) -> $return_type {
+                    let $return_name: Option<$return_type> = self.$return_name.into_inner();
+                    $return_name.unwrap()
+                }
+            }
+        }
+    };
+    ($command_name:ty,
+        command: $client_message_block:block,
+        output => $return_name:ident: $return_type:ty,
+        data: (
+            $data_name:ident,
+            $data_block:block
+        )) => {
+        paste::paste! {
+            pub struct [<$command_name Command>] {
+                $return_name: RefCell<Option<$return_type>>
+            }
+
+            impl [<$command_name Command>] {
+                pub fn new() -> Self {
+                    [<$command_name Command>] {
+                        $return_name: RefCell::new(None)
+                    }
+                }
+            }
+
+            impl CommandBuilder<$return_type> for [<$command_name Command>] {
+                fn get_client_message(&self) -> String {
+                    $client_message_block
+                }
+                fn append_client_data_response(&self, $data_name: String) {
+                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
+                    $data_block
+                }
+                fn set_client_status_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_conclusion_response(&self, _: String) {
+                    // NOP
+                }
+                fn build(self) -> $return_type {
+                    let $return_name: Option<$return_type> = self.$return_name.into_inner();
+                    $return_name.unwrap()
+                }
+            }
+        }
+    };
+    ($command_name:ty,
+        command: $client_message_block:block,
+        output => $return_name:ident: $return_type:ty,
+        conclusion: (
+            $conclusion_name:ident,
+            $conclusion_block:block
+        )) => {
+        paste::paste! {
+            pub struct [<$command_name Command>] {
+                $return_name: RefCell<Option<$return_type>>
+            }
+
+            impl [<$command_name Command>] {
+                pub fn new() -> Self {
+                    [<$command_name Command>] {
+                        $return_name: RefCell::new(None)
+                    }
+                }
+            }
+
+            impl CommandBuilder<$return_type> for [<$command_name Command>] {
+                fn get_client_message(&self) -> String {
+                    $client_message_block
+                }
+                fn append_client_data_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_status_response(&self, _: String) {
+                    // NOP
+                }
+                fn set_client_conclusion_response(&self, $conclusion_name: String) {
+                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
+                    $conclusion_block
+                }
+                fn build(self) -> $return_type {
+                    let $return_name: Option<$return_type> = self.$return_name.into_inner();
+                    $return_name.unwrap()
+                }
+            }
+        }
+    };
+    ($command_name:ty,
+        [$($arg_name:ident: $arg_type:ty),*],
+        command: $client_message_block:block,
+        output => $return_name:ident: $return_type:ty,
+        data: (
+            $data_name:ident,
+            $data_block:block
+        ),
+        status: (
+            $status_name:ident,
+            $status_block:block
+        ),
+        conclusion: (
+            $conclusion_name:ident,
+            $conclusion_block:block
+        )) => {
+        paste::paste! {
+            pub struct [<$command_name Command>] {
+                $(
+                    $arg_name: $arg_type,
+                )*
+                $return_name: RefCell<Option<$return_type>>
+            }
+
+            impl [<$command_name Command>] {
+                pub fn new($($arg_name: $arg_type),*) -> Self {
+                    [<$command_name Command>] {
+                        $(
+                            $arg_name,
+                        )*
+                        $return_name: RefCell::new(None)
+                    }
+                }
+            }
+
+            impl CommandBuilder<$return_type> for [<$command_name Command>] {
+                fn get_client_message(&self) -> String {
+                    $(
+                        $arg_name: &$arg_type = &self.$arg_name;
+                    )*
+                    $client_message_block
+                }
+                fn append_client_data_response(&self, $data_name: String) {
+                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
+                    $data_block
+                }
+                fn set_client_status_response(&self, $status_name: String) {
+                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
+                    $status_block
+                }
+                fn set_client_conclusion_response(&self, $conclusion_name: String) {
+                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
+                    $conclusion_block
+                }
+                fn build(self) -> $return_type {
+                    let $return_name: Option<$return_type> = self.$return_name.into_inner();
+                    $return_name.unwrap()
+                }
+            }
+        }
+    };
+}
+
+pub trait CommandBuilder<TOutput> {
+    fn execute(self, stream: &mut TcpStream) -> Result<TOutput, std::io::Error> where Self:Sized {
 
         // get the client message and prepare to send it
         let client_message = self.get_client_message();
@@ -41,9 +412,9 @@ trait CommandBuilder<TOutput> {
 
             println!("line: {line}");
 
-            if line.starts_with(DATA_PREFIX) {
+            if line.starts_with("data:") {
                 // the line contains data to be processed by the command
-                line = line.replacen(DATA_PREFIX, "", 1);
+                line = line.replacen("data:", "", 1);
                 self.append_client_data_response(line);
             }
             else if !is_status_message_received {
@@ -62,243 +433,153 @@ trait CommandBuilder<TOutput> {
     fn append_client_data_response(&self, data: String);
     fn set_client_status_response(&self, status: String);
     fn set_client_conclusion_response(&self, conclusion: String);
-    fn build(&self) -> TOutput;
+    fn build(self) -> TOutput;
 }
 
-struct GetTextCommand {
-    row: u8,
-    column: u8,
-    length: u8,
-    client_data: Rc<RefCell<Option<String>>>
-}
-
-impl GetTextCommand {
-    fn new(row: u8, column: u8, length: u8) -> Self {
-        GetTextCommand {
-            row,
-            column,
-            length,
-            client_data: Rc::new(RefCell::new(None))
+command!(GetText, [
+        row: u8,
+        column: u8,
+        length: u8
+    ],
+    command: {
+        format!("Ascii({},{},{})", row, column, length)
+    },
+    output => text: String,
+    data: (
+        data, {
+            if text.is_some() {
+                panic!("Unexpected additional text from the client.");
+            }
+            *text = Some(data);
         }
-    }
-}
+    )
+);
 
-impl CommandBuilder<String> for GetTextCommand {
-    fn get_client_message(&self) -> String {
-        format!("Ascii({},{},{})", self.row, self.column, self.length)
-    }
-    fn append_client_data_response(&self, data: String) {
-        let client_data: &mut Option<String> = &mut self.client_data.borrow_mut();
-        if client_data.is_some() {
-            panic!("Unexpected additional client data response with \"{}\" while already having \"{}\".", data, client_data.as_ref().unwrap());
+command!(GetTextRange, [
+        row: u8,
+        column: u8,
+        width: u8,
+        height: u8
+    ],
+    command: {
+        format!("Ascii({},{},{},{})", row, column, width, height)
+    },
+    output => lines: Vec<String>,
+    data: (
+        data, {
+            if lines.is_none() {
+                *lines = Some(Vec::<String>::new());
+            }
+            let lines: &mut Vec<String> = &mut lines.as_mut().unwrap();
+            lines.push(data);
         }
-        *client_data = Some(data);
-    }
-    fn set_client_status_response(&self, status: String) {
-        // NOP
-    }
-    fn set_client_conclusion_response(&self, conclusion: String) {
-        // NOP
-    }
-    fn build(&self) -> String {
-        let client_data: &Option<String> = &self.client_data.borrow();
-        client_data.as_ref().expect("The client data should have been received from the client.").clone()
-    }
-}
+    )
+);
 
-struct GetTextRangeCommand {
-    row: u8,
-    column: u8,
-    width: u8,
-    height: u8,
-    lines: Rc<RefCell<Option<Vec<String>>>>
-}
+command!(MoveCursor, [
+        row: u8,
+        column: u8
+    ],
+    command: {
+        format!("MoveCursor({},{})", row, column)
+    }
+);
 
-impl GetTextRangeCommand {
-    fn new(row: u8, column: u8, width: u8, height: u8) -> Self {
-        GetTextRangeCommand {
-            row,
-            column,
-            width,
-            height,
-            lines: Rc::new(RefCell::new(None))
+command!(SetText, [
+        text: String
+    ],
+    command: {
+        format!("String(\"{}\")", text)
+    }
+);
+
+command!(MoveCursorToNextField,
+    command: {
+        format!("Tab")
+    }
+);
+
+command!(MoveCursorToPreviousField,
+    command: {
+        format!("BackTab")
+    }
+);
+
+command!(MoveCursorToFirstField,
+    command: {
+        String::from("Home")
+    }
+);
+
+command!(SendEnterKey,
+    command: {
+        format!("Enter")
+    }
+);
+
+command!(ClearTextFromField,
+    command: {
+        format!("DeleteField")
+    }
+);
+
+command!(MoveCursorToFieldEnd,
+    command: {
+        format!("FieldEnd")
+    }
+);
+
+command!(MoveCursorToFieldStart,
+    command: {
+        format!("FieldStart")
+    }
+);
+
+command!(WaitForCurrentField,
+    command: {
+        format!("Wait(InputField)")
+    },
+    output => is_successful: bool,
+    conclusion: (
+        conclusion, {
+            *is_successful = Some(conclusion.as_str() == "ok")
         }
-    }
-}
+    )
+);
 
-impl CommandBuilder<Vec<String>> for GetTextRangeCommand {
-    fn get_client_message(&self) -> String {
-        format!("Ascii({},{},{},{})", self.row, self.column, self.width - 1, self.height - 1)
-    }
-    fn append_client_data_response(&self, data: String) {
-        if self.lines.borrow().is_none() {
-            *self.lines.borrow_mut() = Some(Vec::<String>::new());
+command!(WaitForUnlock,
+    command: {
+        format!("Wait(Unlock)")
+    },
+    output => is_successful: bool,
+    conclusion: (
+        conclusion, {
+            *is_successful = Some(conclusion.as_str() == "ok")
         }
-        let mut borrowed_lines = self.lines.borrow_mut();
-        let lines: &mut Vec<String> = &mut borrowed_lines.as_mut().unwrap();
-        lines.push(data);
-    }
-    fn set_client_status_response(&self, status: String) {
-        // NOP
-    }
-    fn set_client_conclusion_response(&self, conclusion: String) {
-        // NOP
-    }
-    fn build(&self) -> Vec<String> {
-        let lines: &Option<Vec<String>> = &self.lines.borrow();
-        lines.as_ref().expect("The lines should have been received from the client.").clone()
-    }
-}
+    )
+);
 
-struct MoveCursorCommand {
-    row: u8,
-    column: u8
-}
-
-impl MoveCursorCommand {
-    fn new(row: u8, column: u8) -> Self {
-        MoveCursorCommand {
-            row,
-            column
+command!(GetCursor,
+    command: {
+        format!("Query(Cursor)")
+    },
+    output => position: (u8, u8),
+    data: (
+        data, {
+            let position_vector = data.split(" ")
+                .map(|item| item.parse::<u8>().expect("The coordinate should be parsable as a u8"))
+                .collect::<Vec<u8>>();
+            let position_tuple = (position_vector[0], position_vector[1]);
+            
+            if position.is_some() {
+                panic!("Unexpected additional client data response with \"{}\" while already having \"{:?}\".", data, position.as_ref().unwrap());
+            }
+            *position = Some(position_tuple);
         }
-    }
-}
+    )
+);
 
-impl CommandBuilder<()> for MoveCursorCommand {
-    fn get_client_message(&self) -> String {
-        format!("MoveCursor({},{})", self.row, self.column)
-    }
-    fn append_client_data_response(&self, data: String) {
-        // NOP
-    }
-    fn set_client_status_response(&self, status: String) {
-        // NOP
-    }
-    fn set_client_conclusion_response(&self, conclusion: String) {
-        // NOP
-    }
-    fn build(&self) -> () {
-        // NOP
-    }
-}
-
-struct SetTextCommand {
-    text: String
-}
-
-impl SetTextCommand {
-    fn new<T: Into<String>>(text: T) -> Self {
-        SetTextCommand {
-            text: text.into()
-        }
-    }
-}
-
-impl CommandBuilder<()> for SetTextCommand {
-    fn get_client_message(&self) -> String {
-        format!("String(\"{}\")", self.text)
-    }
-    fn append_client_data_response(&self, data: String) {
-        // NOP
-    }
-    fn set_client_status_response(&self, status: String) {
-        // NOP
-    }
-    fn set_client_conclusion_response(&self, conclusion: String) {
-        // NOP
-    }
-    fn build(&self) -> () {
-        // NOP
-    }
-}
-
-enum Keys {
-    Enter,
-    Disconnect,
-    DeleteField,
-}
-
-struct SendKeysCommand {
-    keys: Keys
-}
-
-impl SendKeysCommand {
-    fn new(keys: Keys) -> Self {
-        SendKeysCommand {
-            keys
-        }
-    }
-}
-
-impl CommandBuilder<()> for SendKeysCommand {
-    fn get_client_message(&self) -> String {
-        String::from(match self.keys {
-            Keys::Enter => "Enter",
-            Keys::Disconnect => "Disconnect",
-            Keys::DeleteField => "DeleteField",
-        })
-    }
-    fn append_client_data_response(&self, data: String) {
-        // NOP
-    }
-    fn set_client_status_response(&self, status: String) {
-        // NOP
-    }
-    fn set_client_conclusion_response(&self, conclusion: String) {
-        // NOP
-    }
-    fn build(&self) -> () {
-        // NOP
-    }
-}
-
-enum WaitFor {
-    InputField,
-    Unlock,
-    NvtMode,
-    Disconnect,
-}
-
-struct WaitCommand {
-    wait_for: WaitFor,
-    is_successful: Rc<RefCell<Option<bool>>>
-}
-
-impl WaitCommand {
-    fn new(wait_for: WaitFor) -> Self {
-        WaitCommand {
-            wait_for,
-            is_successful: Rc::new(RefCell::new(None))
-        }
-    }
-}
-
-impl CommandBuilder<bool> for WaitCommand {
-    fn get_client_message(&self) -> String {
-        let what = match &self.wait_for {
-            WaitFor::InputField => "InputField",
-            WaitFor::Unlock => "Unlock",
-            WaitFor::NvtMode => "NVTMode",
-            WaitFor::Disconnect => "Disconnect",
-        };
-        format!("Wait({})", what)
-    }
-    fn append_client_data_response(&self, data: String) {
-        // NOP
-    }
-    fn set_client_status_response(&self, status: String) {
-        // NOP
-    }
-    fn set_client_conclusion_response(&self, conclusion: String) {
-        *self.is_successful.borrow_mut() = Some(conclusion.as_str() == "ok");
-    }
-    fn build(&self) -> bool {
-        let is_successful: &Option<bool> = &self.is_successful.borrow();
-        *is_successful.as_ref().expect("The client response should have contained if it was successful or not in waiting.")
-    }
-}
-
-struct Client {
+pub struct Client {
     process: Child
 }
 
@@ -314,12 +595,12 @@ impl Client {
 }
 
 
-struct ClientAddress {
+pub struct ClientAddress {
     mainframe_address: String,
     client_address: String
 }
 
-struct ClientInterface {
+pub struct ClientInterface {
     stream: TcpStream,
     client_address: String
 }
@@ -370,29 +651,8 @@ impl ClientAddress {
 }
 
 impl ClientInterface {
-    fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> Result<TOutput, std::io::Error> {
-        // TODO return?
+    pub fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> Result<TOutput, std::io::Error> {
         return command.execute(&mut self.stream);
-    }
-    pub fn get_text(&mut self, row: u8, column: u8, length: u8) -> Result<String, std::io::Error> {
-        let command = GetTextCommand::new(row, column, length);
-        self.execute(command)
-    }
-    pub fn get_text_range(&mut self, row: u8, column: u8, width: u8, height: u8) -> Result<Vec<String>, std::io::Error> {
-        let command = GetTextRangeCommand::new(row, column, width, height);
-        self.execute(command)
-    }
-    pub fn set_text<T: Into<String>>(&mut self, text: T) -> Result<(), std::io::Error> {
-        let command = SetTextCommand::new(text);
-        self.execute(command)
-    }
-    pub fn move_cursor(&mut self, row: u8, column: u8) -> Result<(), std::io::Error> {
-        let command = MoveCursorCommand::new(row, column);
-        self.execute(command)
-    }
-    pub fn send_keys(&mut self, keys: Keys) -> Result<(), std::io::Error> {
-        let command = SendKeysCommand::new(keys);
-        self.execute(command)
     }
     pub fn disconnect(&mut self) {
         let shutdown_result = self.stream.shutdown(std::net::Shutdown::Both);
@@ -404,12 +664,20 @@ impl ClientInterface {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{time::Duration, sync::Mutex};
 
     use super::*;
 
+    static is_previous_still_running: Mutex<bool> = Mutex::new(false);
+
     fn init() {
         std::env::set_var("RUST_BACKTRACE", "1");
+        assert!(!*is_previous_still_running.lock().unwrap());
+        let _ = std::mem::replace(&mut *is_previous_still_running.lock().unwrap(), true);
+    }
+
+    fn cleanup() {
+        let _ = std::mem::replace(&mut *is_previous_still_running.lock().unwrap(), false);
     }
 
     #[test]
@@ -429,6 +697,8 @@ mod tests {
         // kill client
         let kill_result = client.kill();
         assert!(kill_result.is_ok());
+
+        cleanup();
     }
 
     #[test]
@@ -458,7 +728,7 @@ mod tests {
         assert!(interface.is_some());
         let mut interface = interface.unwrap();
         
-        let execute_result = interface.get_text_range(0, 0, 24, 80);
+        let execute_result = interface.execute(GetTextRangeCommand::new(0, 0, 80, 24));
 
         // wait a second
         println!("waiting after getting text...");
@@ -483,5 +753,203 @@ mod tests {
         // kill client
         let kill_result = client.kill();
         assert!(kill_result.is_ok());
+
+        cleanup();
+    }
+
+    #[test]
+    fn start_client_then_next_field_then_previous_field_then_kill() {
+        init();
+
+        let client_address = ClientAddress::new("localhost:3270", 3271);
+        
+        // spawn client
+        let client = client_address.try_start_client_process();
+        assert!(client.is_some());
+        let mut client = client.unwrap();
+        
+        // wait a second
+        println!("waiting for client to be ready...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        // create interface
+        let interface = client_address.try_connect_to_client_process();
+
+        if interface.is_none() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+        }
+
+        assert!(interface.is_some());
+        let mut interface = interface.unwrap();
+        
+        // move forward
+        let execute_result = interface.execute(MoveCursorToNextFieldCommand::new());
+
+        // wait a second
+        println!("waiting after moving to next field...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        if execute_result.is_err() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+
+            let error = execute_result.err().unwrap();
+            println!("error: {}", error);
+            panic!("Error getting text from screen: {}", error);
+        }
+
+        assert!(execute_result.is_ok());
+
+        // move backward
+        let execute_result = interface.execute(MoveCursorToPreviousFieldCommand::new());
+
+        // wait a second
+        println!("waiting after moving to previous field...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        if execute_result.is_err() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+
+            let error = execute_result.err().unwrap();
+            println!("error: {}", error);
+            panic!("Error getting text from screen: {}", error);
+        }
+
+        assert!(execute_result.is_ok());
+
+        // kill client
+        let kill_result = client.kill();
+        assert!(kill_result.is_ok());
+
+        cleanup();
+    }
+
+    #[test]
+    fn start_client_then_end_of_field_then_beginning_of_field_then_kill() {
+        init();
+
+        let client_address = ClientAddress::new("localhost:3270", 3271);
+        
+        // spawn client
+        let client = client_address.try_start_client_process();
+        assert!(client.is_some());
+        let mut client = client.unwrap();
+        
+        // wait a second
+        println!("waiting for client to be ready...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        // create interface
+        let interface = client_address.try_connect_to_client_process();
+
+        if interface.is_none() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+        }
+
+        assert!(interface.is_some());
+        let mut interface = interface.unwrap();
+        
+        // move forward
+        let execute_result = interface.execute(MoveCursorToFieldEndCommand::new());
+
+        // wait a second
+        println!("waiting after moving to end of field...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        if execute_result.is_err() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+
+            let error = execute_result.err().unwrap();
+            println!("error: {}", error);
+            panic!("Error getting text from screen: {}", error);
+        }
+
+        assert!(execute_result.is_ok());
+
+        // move backward
+        let execute_result = interface.execute(MoveCursorToFieldStartCommand::new());
+
+        // wait a second
+        println!("waiting after moving to beginning of field...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        if execute_result.is_err() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+
+            let error = execute_result.err().unwrap();
+            println!("error: {}", error);
+            panic!("Error getting text from screen: {}", error);
+        }
+
+        assert!(execute_result.is_ok());
+
+        // kill client
+        let kill_result = client.kill();
+        assert!(kill_result.is_ok());
+
+        cleanup();
+    }
+
+    #[test]
+    fn start_client_then_get_cursor_position_then_kill() {
+        init();
+
+        let client_address = ClientAddress::new("localhost:3270", 3271);
+        
+        // spawn client
+        let client = client_address.try_start_client_process();
+        assert!(client.is_some());
+        let mut client = client.unwrap();
+        
+        // wait a second
+        println!("waiting for client to be ready...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        // create interface
+        let interface = client_address.try_connect_to_client_process();
+
+        if interface.is_none() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+        }
+
+        assert!(interface.is_some());
+        let mut interface = interface.unwrap();
+        
+        let execute_result = interface.execute(GetCursorCommand::new());
+
+        // wait a second
+        println!("waiting after getting text...");
+        std::thread::sleep(Duration::from_secs(1));
+
+        if execute_result.is_err() {
+            // kill client
+            let kill_result = client.kill();
+            assert!(kill_result.is_ok());
+
+            let error = execute_result.err().unwrap();
+            println!("error: {}", error);
+            panic!("Error getting text from screen: {}", error);
+        }
+
+        assert!(execute_result.is_ok());
+
+        // kill client
+        let kill_result = client.kill();
+        assert!(kill_result.is_ok());
+
+        cleanup();
     }
 }
