@@ -116,6 +116,29 @@ impl CommandBuilder<()> for MoveCursorCommand {
     }
 }
 
+struct SendStringCommand {
+    string: String
+}
+
+impl CommandBuilder<()> for SendStringCommand {
+    fn get_client_message(&self) -> String {
+        format!("String(\"{}\")", self.string)
+    }
+    fn append_client_data_response(&self, message: String) {
+        // NOP
+    }
+    fn set_client_status_response(&self, status: String) {
+        // NOP
+    }
+    fn set_client_conclusion_response(&self, conclusion: String) {
+        // NOP
+    }
+    fn build(&self) -> () {
+        // NOP
+    }
+}
+
+
 struct ClientInterfaceAddress {
     client_address: String,
 }
