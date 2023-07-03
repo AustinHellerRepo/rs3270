@@ -39,14 +39,14 @@ trait CommandBuilder<TOutput> {
     fn build(&self) -> TOutput;
 }
 
-struct AsciiRclCommand {
+struct GetTextCommand {
     row: u8,
     column: u8,
     length: u8,
     client_data: Rc<RefCell<Option<String>>>
 }
 
-impl CommandBuilder<String> for AsciiRclCommand {
+impl CommandBuilder<String> for GetTextCommand {
     fn get_client_message(&self) -> String {
         format!("Ascii({},{},{})", self.row, self.column, self.length)
     }
@@ -69,17 +69,17 @@ impl CommandBuilder<String> for AsciiRclCommand {
     }
 }
 
-struct AsciiRcrcCommand {
-    from_row: u8,
-    from_column: u8,
-    to_row: u8,
-    to_column: u8,
+struct GetTextRangeCommand {
+    row: u8,
+    column: u8,
+    width_offset: u8,
+    height_offset: u8,
     lines: Rc<RefCell<Option<Vec<String>>>>
 }
 
-impl CommandBuilder<Vec<String>> for AsciiRcrcCommand {
+impl CommandBuilder<Vec<String>> for GetTextRangeCommand {
     fn get_client_message(&self) -> String {
-        format!("Ascii({},{},{},{})", self.from_row, self.from_column, (self.to_row - self.from_row), (self.to_column - self.from_column))
+        format!("Ascii({},{},{},{})", self.row, self.column, self.width_offset, self.height_offset)
     }
     fn append_client_data_response(&self, data: String) {
         if self.lines.borrow().is_none() {
@@ -148,11 +148,11 @@ impl CommandBuilder<()> for MoveCursorCommand {
     }
 }
 
-struct SendStringCommand {
+struct SetTextCommand {
     string: String
 }
 
-impl CommandBuilder<()> for SendStringCommand {
+impl CommandBuilder<()> for SetTextCommand {
     fn get_client_message(&self) -> String {
         format!("String(\"{}\")", self.string)
     }
