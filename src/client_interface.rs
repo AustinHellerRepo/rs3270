@@ -69,6 +69,30 @@ impl CommandBuilder<String> for AsciiRclCommand {
     }
 }
 
+struct ConnectCommand {
+    host_name: String,
+    is_connected: Rc<RefCell<Option<bool>>>
+}
+
+impl CommandBuilder<bool> for ConnectCommand {
+    fn get_client_message(&self) -> String {
+        return format!("Connect({})", self.host_name);
+    }
+    fn append_client_data_response(&self, message: String) {
+        // NOP
+    }
+    fn set_client_status_response(&self, status: String) {
+        // NOP
+    }
+    fn set_client_conclusion_response(&self, conclusion: String) {
+        *self.is_connected.borrow_mut() = Some(conclusion.as_str() == "ok");
+    }
+    fn build(&self) -> bool {
+        let is_connected: &Option<bool> = &self.is_connected.borrow();
+        return *is_connected.as_ref().expect("The client response should have contained if it was able to connect.");
+    }
+}
+
 
 struct ClientInterfaceAddress {
     client_address: String,
