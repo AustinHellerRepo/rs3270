@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+mod client_interface;
+
 use std::{collections::HashMap, marker::PhantomData, cell::RefCell, rc::Rc};
 
 enum KeyCode {
@@ -114,7 +116,6 @@ trait ReadOnlyMainframeProvider {
 trait MainframeProvider: ReadOnlyMainframeProvider {
     fn set_text_at_location(&self, x: u8, y: u8, text: &str) -> ();
     fn send_key_press(&self, key_press: &KeyPress) -> ();
-    fn as_readonly(&self) -> &dyn ReadOnlyMainframeProvider;
 }
 
 trait Screen<T: MainframeProvider> {
@@ -262,7 +263,7 @@ mod tests {
     use super::*;
 
     struct TestMainframeProvider {
-
+        
     }
 
     impl ReadOnlyMainframeProvider for TestMainframeProvider {
@@ -282,10 +283,6 @@ mod tests {
 
         fn send_key_press(&self, key_press: &KeyPress) -> () {
             todo!()
-        }
-
-        fn as_readonly(&self) -> &dyn ReadOnlyMainframeProvider {
-            self
         }
     }
 
