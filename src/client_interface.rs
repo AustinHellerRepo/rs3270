@@ -48,7 +48,7 @@ struct AsciiRclCommand {
 
 impl CommandBuilder<String> for AsciiRclCommand {
     fn get_client_message(&self) -> String {
-        return format!("Ascii({},{},{})", self.row, self.column, self.length);
+        format!("Ascii({},{},{})", self.row, self.column, self.length)
     }
     fn append_client_data_response(&self, data: String) {
         let client_data: &mut Option<String> = &mut self.client_data.borrow_mut();
@@ -65,7 +65,7 @@ impl CommandBuilder<String> for AsciiRclCommand {
     }
     fn build(&self) -> String {
         let client_data: &Option<String> = &self.client_data.borrow();
-        return client_data.as_ref().expect("The client data should have been received from the client.").clone();
+        client_data.as_ref().expect("The client data should have been received from the client.").clone()
     }
 }
 
@@ -76,7 +76,7 @@ struct ConnectCommand {
 
 impl CommandBuilder<bool> for ConnectCommand {
     fn get_client_message(&self) -> String {
-        return format!("Connect({})", self.host_name);
+        format!("Connect({})", self.host_name)
     }
     fn append_client_data_response(&self, message: String) {
         // NOP
@@ -89,10 +89,32 @@ impl CommandBuilder<bool> for ConnectCommand {
     }
     fn build(&self) -> bool {
         let is_connected: &Option<bool> = &self.is_connected.borrow();
-        return *is_connected.as_ref().expect("The client response should have contained if it was able to connect.");
+        *is_connected.as_ref().expect("The client response should have contained if it was able to connect.")
     }
 }
 
+struct MoveCursorCommand {
+    row: u8,
+    column: u8
+}
+
+impl CommandBuilder<()> for MoveCursorCommand {
+    fn get_client_message(&self) -> String {
+        format!("MoveCursor({},{})", self.row, self.column)
+    }
+    fn append_client_data_response(&self, message: String) {
+        // NOP
+    }
+    fn set_client_status_response(&self, status: String) {
+        // NOP
+    }
+    fn set_client_conclusion_response(&self, conclusion: String) {
+        // NOP
+    }
+    fn build(&self) -> () {
+        // NOP
+    }
+}
 
 struct ClientInterfaceAddress {
     client_address: String,
