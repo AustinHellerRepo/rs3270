@@ -33,7 +33,7 @@ trait CommandBuilder<TOutput> {
         Ok(self.build())
     }
     fn get_client_message(&self) -> String;
-    fn append_client_data_response(&self, message: String);
+    fn append_client_data_response(&self, data: String);
     fn set_client_status_response(&self, status: String);
     fn set_client_conclusion_response(&self, conclusion: String);
     fn build(&self) -> TOutput;
@@ -69,6 +69,38 @@ impl CommandBuilder<String> for AsciiRclCommand {
     }
 }
 
+struct AsciiRcrcCommand {
+    from_row: u8,
+    from_column: u8,
+    to_row: u8,
+    to_column: u8,
+    lines: Rc<RefCell<Option<Vec<String>>>>
+}
+
+impl CommandBuilder<Vec<String>> for AsciiRcrcCommand {
+    fn get_client_message(&self) -> String {
+        format!("Ascii({},{},{},{})", self.from_row, self.from_column, (self.to_row - self.from_row), (self.to_column - self.from_column))
+    }
+    fn append_client_data_response(&self, data: String) {
+        if self.lines.borrow().is_none() {
+            *self.lines.borrow_mut() = Some(Vec::<String>::new());
+        }
+        let mut borrowed_lines = self.lines.borrow_mut();
+        let lines: &mut Vec<String> = &mut borrowed_lines.as_mut().unwrap();
+        lines.push(data);
+    }
+    fn set_client_status_response(&self, status: String) {
+        // NOP
+    }
+    fn set_client_conclusion_response(&self, conclusion: String) {
+        // NOP
+    }
+    fn build(&self) -> Vec<String> {
+        let lines: &Option<Vec<String>> = &self.lines.borrow();
+        lines.as_ref().expect("The lines should have been received from the client.").clone()
+    }
+}
+
 struct ConnectCommand {
     host_name: String,
     is_connected: Rc<RefCell<Option<bool>>>
@@ -78,7 +110,7 @@ impl CommandBuilder<bool> for ConnectCommand {
     fn get_client_message(&self) -> String {
         format!("Connect({})", self.host_name)
     }
-    fn append_client_data_response(&self, message: String) {
+    fn append_client_data_response(&self, data: String) {
         // NOP
     }
     fn set_client_status_response(&self, status: String) {
@@ -102,7 +134,7 @@ impl CommandBuilder<()> for MoveCursorCommand {
     fn get_client_message(&self) -> String {
         format!("MoveCursor({},{})", self.row, self.column)
     }
-    fn append_client_data_response(&self, message: String) {
+    fn append_client_data_response(&self, data: String) {
         // NOP
     }
     fn set_client_status_response(&self, status: String) {
@@ -124,7 +156,7 @@ impl CommandBuilder<()> for SendStringCommand {
     fn get_client_message(&self) -> String {
         format!("String(\"{}\")", self.string)
     }
-    fn append_client_data_response(&self, message: String) {
+    fn append_client_data_response(&self, data: String) {
         // NOP
     }
     fn set_client_status_response(&self, status: String) {
