@@ -4,40 +4,83 @@ use std::{net::TcpStream, io::{Write, BufReader}, io::BufRead, cell::RefCell, pr
 
 // TODO always check the status for "ok" or "error"
 
-pub enum CommandResponse<T> {
+#[derive(Debug)]
+pub enum ExecutionResult<T> {
     Unset,
     Success(T),
-    Failure,
+    IoError(std::io::Error),
+    CommandFailure(Option<String>),
 }
 
-fn unwrap_failed(message: &str) -> ! {
-    panic!("{message}")
+fn unwrap_failed(msg: &str, error: &dyn std::fmt::Debug) -> ! {
+    panic!("{msg}: {error:?}")
 }
 
-impl<T> CommandResponse<T> {
+impl<T: std::fmt::Debug> ExecutionResult<T> {
     pub fn unwrap(self) -> T {
         match self {
-            CommandResponse::Success(item) => {
+            ExecutionResult::Success(item) => {
                 item
             },
-            CommandResponse::Failure => {
-                unwrap_failed("Failed to unwrap failure CommandResponse")
+            ExecutionResult::IoError(e) => {
+                unwrap_failed("called `ExecutionResult::unwrap()` on an `IoError` value", &e)
             },
-            CommandResponse::Unset => {
-                unwrap_failed("Failed to unwrap unset CommandResponse.")
+            ExecutionResult::CommandFailure(cf) => {
+                unwrap_failed("called `ExecutionResult::unwrap()` on a `CommandFailure` value", &cf)
+            }
+            ExecutionResult::Unset => {
+                unwrap_failed("called `ExecutionResult::unwrap()` on an `Unset` value", &self)
             }
         }
     }
     pub fn expect(self, message: &str) -> T {
         match self {
-            CommandResponse::Success(item) => {
+            ExecutionResult::Success(item) => {
                 item
             },
-            CommandResponse::Failure => {
-                unwrap_failed(message)
+            ExecutionResult::IoError(e) => {
+                unwrap_failed(message, &e)
             },
-            CommandResponse::Unset => {
-                unwrap_failed(message)
+            ExecutionResult::CommandFailure(cf) => {
+                unwrap_failed(message, &cf)
+            },
+            ExecutionResult::Unset => {
+                unwrap_failed(message, &self)
+            }
+        }
+    }
+    pub fn is_err(&self) -> bool {
+        match self {
+            ExecutionResult::Success(_) => {
+                false
+            },
+            ExecutionResult::IoError(_) => {
+                true
+            },
+            ExecutionResult::CommandFailure(_) => {
+                true
+            },
+            ExecutionResult::Unset => {
+                true
+            }
+        }
+    }
+    pub fn is_ok(&self) -> bool {
+        !self.is_err()
+    }
+    pub fn err(self) -> Option<String> {
+        match self {
+            ExecutionResult::Success(_) => {
+                None
+            },
+            ExecutionResult::IoError(e) => {
+                Some(format!("{e:?}"))
+            }
+            ExecutionResult::CommandFailure(cf) => {
+                Some(format!("{cf:?}"))
+            }
+            ExecutionResult::Unset => {
+                Some(format!("ExecutionResult::Unset"))
             }
         }
     }
@@ -48,13 +91,13 @@ macro_rules! command {
         command: $client_message_block:block) => {
         paste::paste! {
             pub struct [<$command_name Command>] {
-                [<$command_name:camel _is_successful>]: RefCell<CommandResponse<()>>
+                [<$command_name:camel _is_successful>]: RefCell<ExecutionResult<()>>
             }
 
             impl [<$command_name Command>] {
                 pub fn new() -> Self {
                     [<$command_name Command>] {
-                        [<$command_name:camel _is_successful>]: RefCell::new(CommandResponse::Unset)
+                        [<$command_name:camel _is_successful>]: RefCell::new(ExecutionResult::Unset)
                     }
                 }
             }
@@ -362,7 +405,7 @@ macro_rules! command {
 }
 
 pub trait CommandBuilder<TOutput> {
-    fn execute(self, stream: &mut TcpStream) -> Result<CommandResponse<TOutput>, std::io::Error> where Self:Sized {
+    fn execute(self, stream: &mut TcpStream) -> ExecutionResult<TOutput> where Self:Sized {
 
         // get the client message and prepare to send it
         let client_message = self.get_client_message();
@@ -373,12 +416,12 @@ pub trait CommandBuilder<TOutput> {
         let write_all_result = stream.write_all(client_message.as_bytes());
         if let Err(error) = write_all_result {
             println!("CommandBuilder: execute: write_all: error: {}", error);
-            return Err(error);
+            return ExecutionResult::IoError(error);
         }
         let flush_result = stream.flush();
         if let Err(error) = flush_result {
             println!("CommandBuilder: execute: flush: error: {}", error);
-            return Err(error);
+            return ExecutionResult::IoError(error);
         }
 
         // begin reading the response from the running/connected program
@@ -388,15 +431,15 @@ pub trait CommandBuilder<TOutput> {
         let mut is_status_message_received = false;
         let mut iteration_count = 0;
         let mut is_conclusion_successful = false;
+        let mut first_line: Option<String> = None;
         while !is_finished_reading {
             println!("read iteration: {}", iteration_count);
-            iteration_count += 1;
 
             let mut line = String::new();
             let read_line_result = reader.read_line(&mut line);
             if let Err(error) = read_line_result {
                 println!("CommandBuilder: execute: read_line: error: {}", error);
-                return Err(error);
+                return ExecutionResult::IoError(error);
             }
 
             println!("line: {line}");
@@ -406,6 +449,9 @@ pub trait CommandBuilder<TOutput> {
                 line = line
                     .replacen("data: ", "", 1)
                     .replace("\n", "");
+                if iteration_count == 0 {
+                    first_line = Some(line.clone());
+                }
                 self.append_client_data_response(line);
             }
             else if !is_status_message_received {
@@ -421,13 +467,15 @@ pub trait CommandBuilder<TOutput> {
                 }
                 is_finished_reading = true;
             }
+
+            iteration_count += 1;
         }
 
         if is_conclusion_successful {
-            Ok(CommandResponse::Success(self.build()))
+            ExecutionResult::Success(self.build())
         }
         else {
-            Ok(CommandResponse::Failure)
+            ExecutionResult::CommandFailure(first_line)
         }
     }
     fn get_client_message(&self) -> String;
@@ -638,7 +686,7 @@ impl ClientAddress {
 }
 
 impl ClientInterface {
-    pub fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> Result<CommandResponse<TOutput>, std::io::Error> {
+    pub fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> ExecutionResult<TOutput> {
         return command.execute(&mut self.stream);
     }
     pub fn disconnect(&mut self) {
@@ -733,7 +781,7 @@ mod tests {
 
         assert!(execute_result.is_ok());
         // TODO verify some of the text
-        for line in execute_result.unwrap().unwrap().iter() {
+        for line in execute_result.unwrap().iter() {
             println!("{}", line);
         }
 
