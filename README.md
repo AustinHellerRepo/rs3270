@@ -5,6 +5,7 @@ This library abstracts over interacting with the x3270 client. Simply provide th
 
 - The `ClientAddress` struct provides the means to spawn a `Client` x3270 and a `ClientInterface` for sending commands to that x3270 instance.
   - Each `Command` implementation utilizes a custom `command!` macro to simplify and reduce duplicate code
+- The `MainframeProvider` struct provides functions that utilize one or more lower-level calls to the `ClientInterface`, allowing for more complex operations.
 
 ## Usage
 
@@ -21,3 +22,17 @@ To use this higher-level abstraction, simply create an instance of the `ClientIn
 ## Examples
 
 **Example coming soon**
+
+## Inspiration
+
+This crate was inspired by two existing libraries from two different languages.
+- j3270
+  - https://github.com/filipesimoes/j3270
+- py3270
+  - https://github.com/py3270/py3270
+
+## Future work
+
+- Headless operation
+- Windows support
+- Higher automation processing layer

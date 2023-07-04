@@ -2,6 +2,13 @@
 name = "rs3270"
 version = "0.1.0"
 edition = "2021"
+authors = ["Austin Heller"]
+description = "This library abstracts over interacting with the x3270 client. Simply provide the mainframe address and the scripting port for the client in order to immediately interact with the x3270 client programmatically."
+readme = "README.md"
+repository = "https://github.com/AustinHellerRepo/rs3270"
+license = "MIT OR Apache-2.0"
+keywords = ["terminal", "client", "io", "wrapper", "automation"]
+categories = ["api-bindings"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
