@@ -273,7 +273,9 @@ mod tests {
             let get_text_range_result = self.client_interface
                 .borrow_mut()
                 .execute(GetTextRangeCommand::new(0, 0, 80, 24));
-            let lines = get_text_range_result.expect("The lines should be returned from the client interface");
+            let lines = get_text_range_result
+                .expect("The lines should be returned from the client interface")
+                .unwrap();
             lines
                 .into_iter()
                 .map(|mut line| {
@@ -286,7 +288,8 @@ mod tests {
             let line = self.client_interface
                 .borrow_mut()
                 .execute(GetTextCommand::new(y, x, length))
-                .expect("The line should have been returned from the client interface.");
+                .expect("The line should have been returned from the client interface.")
+                .unwrap();
             line
         }
         fn get_fields_count(&self) -> u8 {
@@ -320,7 +323,8 @@ mod tests {
             let current_cursor_position = self.client_interface
                 .borrow_mut()
                 .execute(GetCursorCommand::new())
-                .expect("The client interface should have returned the cursor position.");
+                .expect("The client interface should have returned the cursor position.")
+                .unwrap();
             
             // move the cursor to the appropriate location
             self.client_interface

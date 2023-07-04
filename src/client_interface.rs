@@ -2,15 +2,60 @@
 
 use std::{net::TcpStream, io::{Write, BufReader}, io::BufRead, cell::RefCell, process::Child};
 
+// TODO always check the status for "ok" or "error"
+
+pub enum CommandResponse<T> {
+    Unset,
+    Success(T),
+    Failure,
+}
+
+fn unwrap_failed(message: &str) -> ! {
+    panic!("{message}")
+}
+
+impl<T> CommandResponse<T> {
+    pub fn unwrap(self) -> T {
+        match self {
+            CommandResponse::Success(item) => {
+                item
+            },
+            CommandResponse::Failure => {
+                unwrap_failed("Failed to unwrap failure CommandResponse")
+            },
+            CommandResponse::Unset => {
+                unwrap_failed("Failed to unwrap unset CommandResponse.")
+            }
+        }
+    }
+    pub fn expect(self, message: &str) -> T {
+        match self {
+            CommandResponse::Success(item) => {
+                item
+            },
+            CommandResponse::Failure => {
+                unwrap_failed(message)
+            },
+            CommandResponse::Unset => {
+                unwrap_failed(message)
+            }
+        }
+    }
+}
+
 macro_rules! command {
     ($command_name:ty,
         command: $client_message_block:block) => {
         paste::paste! {
-            pub struct [<$command_name Command>] {}
+            pub struct [<$command_name Command>] {
+                [<$command_name:camel _is_successful>]: RefCell<CommandResponse<()>>
+            }
 
             impl [<$command_name Command>] {
                 pub fn new() -> Self {
-                    [<$command_name Command>] {}
+                    [<$command_name Command>] {
+                        [<$command_name:camel _is_successful>]: RefCell::new(CommandResponse::Unset)
+                    }
                 }
             }
 
@@ -19,12 +64,6 @@ macro_rules! command {
                     $client_message_block
                 }
                 fn append_client_data_response(&self, _: String) {
-                    // NOP
-                }
-                fn set_client_status_response(&self, _: String) {
-                    // NOP
-                }
-                fn set_client_conclusion_response(&self, _: String) {
                     // NOP
                 }
                 fn build(self) -> () {
@@ -61,12 +100,6 @@ macro_rules! command {
                     $client_message_block
                 }
                 fn append_client_data_response(&self, _: String) {
-                    // NOP
-                }
-                fn set_client_status_response(&self, _: String) {
-                    // NOP
-                }
-                fn set_client_conclusion_response(&self, _: String) {
                     // NOP
                 }
                 fn build(self) -> () {
@@ -108,12 +141,6 @@ macro_rules! command {
                 fn append_client_data_response(&self, _: String) {
                     // NOP
                 }
-                fn set_client_status_response(&self, _: String) {
-                    // NOP
-                }
-                fn set_client_conclusion_response(&self, _: String) {
-                    // NOP
-                }
                 fn build(self) -> $return_type {
                     let $return_name: Option<$return_type> = self.$return_name.into_inner();
                     $return_name.unwrap()
@@ -159,12 +186,6 @@ macro_rules! command {
                     let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
                     $data_block
                 }
-                fn set_client_status_response(&self, _: String) {
-                    // NOP
-                }
-                fn set_client_conclusion_response(&self, _: String) {
-                    // NOP
-                }
                 fn build(self) -> $return_type {
                     let $return_name: Option<$return_type> = self.$return_name.into_inner();
                     $return_name.unwrap()
@@ -256,12 +277,6 @@ macro_rules! command {
                     let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
                     $data_block
                 }
-                fn set_client_status_response(&self, _: String) {
-                    // NOP
-                }
-                fn set_client_conclusion_response(&self, _: String) {
-                    // NOP
-                }
                 fn build(self) -> $return_type {
                     let $return_name: Option<$return_type> = self.$return_name.into_inner();
                     $return_name.unwrap()
@@ -271,11 +286,7 @@ macro_rules! command {
     };
     ($command_name:ty,
         command: $client_message_block:block,
-        output => $return_name:ident: $return_type:ty,
-        conclusion: (
-            $conclusion_name:ident,
-            $conclusion_block:block
-        )) => {
+        output => $return_name:ident: $return_type:ty) => {
         paste::paste! {
             pub struct [<$command_name Command>] {
                 $return_name: RefCell<Option<$return_type>>
@@ -296,13 +307,6 @@ macro_rules! command {
                 fn append_client_data_response(&self, _: String) {
                     // NOP
                 }
-                fn set_client_status_response(&self, _: String) {
-                    // NOP
-                }
-                fn set_client_conclusion_response(&self, $conclusion_name: String) {
-                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
-                    $conclusion_block
-                }
                 fn build(self) -> $return_type {
                     let $return_name: Option<$return_type> = self.$return_name.into_inner();
                     $return_name.unwrap()
@@ -317,14 +321,6 @@ macro_rules! command {
         data: (
             $data_name:ident,
             $data_block:block
-        ),
-        status: (
-            $status_name:ident,
-            $status_block:block
-        ),
-        conclusion: (
-            $conclusion_name:ident,
-            $conclusion_block:block
         )) => {
         paste::paste! {
             pub struct [<$command_name Command>] {
@@ -356,14 +352,6 @@ macro_rules! command {
                     let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
                     $data_block
                 }
-                fn set_client_status_response(&self, $status_name: String) {
-                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
-                    $status_block
-                }
-                fn set_client_conclusion_response(&self, $conclusion_name: String) {
-                    let $return_name: &mut Option<$return_type> = &mut self.$return_name.borrow_mut();
-                    $conclusion_block
-                }
                 fn build(self) -> $return_type {
                     let $return_name: Option<$return_type> = self.$return_name.into_inner();
                     $return_name.unwrap()
@@ -374,7 +362,7 @@ macro_rules! command {
 }
 
 pub trait CommandBuilder<TOutput> {
-    fn execute(self, stream: &mut TcpStream) -> Result<TOutput, std::io::Error> where Self:Sized {
+    fn execute(self, stream: &mut TcpStream) -> Result<CommandResponse<TOutput>, std::io::Error> where Self:Sized {
 
         // get the client message and prepare to send it
         let client_message = self.get_client_message();
@@ -399,6 +387,7 @@ pub trait CommandBuilder<TOutput> {
         let mut is_finished_reading = false;
         let mut is_status_message_received = false;
         let mut iteration_count = 0;
+        let mut is_conclusion_successful = false;
         while !is_finished_reading {
             println!("read iteration: {}", iteration_count);
             iteration_count += 1;
@@ -412,27 +401,37 @@ pub trait CommandBuilder<TOutput> {
 
             println!("line: {line}");
 
-            if line.starts_with("data:") {
+            if line.starts_with("data: ") {
                 // the line contains data to be processed by the command
-                line = line.replacen("data:", "", 1);
+                line = line
+                    .replacen("data: ", "", 1)
+                    .replace("\n", "");
                 self.append_client_data_response(line);
             }
             else if !is_status_message_received {
-                self.set_client_status_response(line);
+                // NOP
                 is_status_message_received = true;
             }
             else {
-                self.set_client_conclusion_response(line);
+                if line.as_str().trim() == "ok" {
+                    is_conclusion_successful = true;
+                }
+                else {
+                    println!("client_interface: CommandBuilder: execute: error: \"{}\"", line);
+                }
                 is_finished_reading = true;
             }
         }
-        
-        Ok(self.build())
+
+        if is_conclusion_successful {
+            Ok(CommandResponse::Success(self.build()))
+        }
+        else {
+            Ok(CommandResponse::Failure)
+        }
     }
     fn get_client_message(&self) -> String;
     fn append_client_data_response(&self, data: String);
-    fn set_client_status_response(&self, status: String);
-    fn set_client_conclusion_response(&self, conclusion: String);
     fn build(self) -> TOutput;
 }
 
@@ -462,7 +461,7 @@ command!(GetTextRange, [
         height: u8
     ],
     command: {
-        format!("Ascii({},{},{},{})", row, column, width, height)
+        format!("Ascii({},{},{},{})", row, column, height - 1, width - 1)
     },
     output => lines: Vec<String>,
     data: (
@@ -529,34 +528,18 @@ command!(MoveCursorToFieldEnd,
     }
 );
 
-command!(MoveCursorToFieldStart,
-    command: {
-        format!("FieldStart")
-    }
-);
-
 command!(WaitForCurrentField,
     command: {
         format!("Wait(InputField)")
     },
-    output => is_successful: bool,
-    conclusion: (
-        conclusion, {
-            *is_successful = Some(conclusion.as_str() == "ok")
-        }
-    )
+    output => is_successful: bool
 );
 
 command!(WaitForUnlock,
     command: {
         format!("Wait(Unlock)")
     },
-    output => is_successful: bool,
-    conclusion: (
-        conclusion, {
-            *is_successful = Some(conclusion.as_str() == "ok")
-        }
-    )
+    output => is_successful: bool
 );
 
 command!(GetCursor,
@@ -566,8 +549,12 @@ command!(GetCursor,
     output => position: (u8, u8),
     data: (
         data, {
-            let position_vector = data.split(" ")
-                .map(|item| item.parse::<u8>().expect("The coordinate should be parsable as a u8"))
+            let position_vector = data
+                .split(" ")
+                .map(|item| {
+                    println!("GetCursorCommand: parsing \"{}\"", &item); 
+                    item.parse::<u8>().expect("The coordinate should be parsable as a u8")
+                })
                 .collect::<Vec<u8>>();
             let position_tuple = (position_vector[0], position_vector[1]);
             
@@ -651,7 +638,7 @@ impl ClientAddress {
 }
 
 impl ClientInterface {
-    pub fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> Result<TOutput, std::io::Error> {
+    pub fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> Result<CommandResponse<TOutput>, std::io::Error> {
         return command.execute(&mut self.stream);
     }
     pub fn disconnect(&mut self) {
@@ -746,7 +733,7 @@ mod tests {
 
         assert!(execute_result.is_ok());
         // TODO verify some of the text
-        for line in execute_result.unwrap().iter() {
+        for line in execute_result.unwrap().unwrap().iter() {
             println!("{}", line);
         }
 
@@ -830,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn start_client_then_end_of_field_then_beginning_of_field_then_kill() {
+    fn start_client_then_end_of_field_then_kill() {
         init();
 
         let client_address = ClientAddress::new("localhost:3270", 3271);
@@ -861,25 +848,6 @@ mod tests {
 
         // wait a second
         println!("waiting after moving to end of field...");
-        std::thread::sleep(Duration::from_secs(1));
-
-        if execute_result.is_err() {
-            // kill client
-            let kill_result = client.kill();
-            assert!(kill_result.is_ok());
-
-            let error = execute_result.err().unwrap();
-            println!("error: {}", error);
-            panic!("Error getting text from screen: {}", error);
-        }
-
-        assert!(execute_result.is_ok());
-
-        // move backward
-        let execute_result = interface.execute(MoveCursorToFieldStartCommand::new());
-
-        // wait a second
-        println!("waiting after moving to beginning of field...");
         std::thread::sleep(Duration::from_secs(1));
 
         if execute_result.is_err() {
