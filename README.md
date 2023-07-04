@@ -3,19 +3,21 @@ This library abstracts over interacting with the x3270 client. Simply provide th
 
 ## Features
 
-- The `ClientAddress` struct provides the means to spawn a `Client` x3270 and a `ClientInterface` for sending commands to that x3270 instance.
-  - Each `CommandBuilder` implementation utilizes a custom `command!` macro to simplify and reduce duplicate code.
+- A `ClientSpawner` implementation provides the means to spawn a `Client`.
+  - The current version of this crate provides the x3270 implementation.
+- A `CommandExecutor` implementation provides the means to run commands against the connected client.
+- Each `CommandBuilder` implementation utilizes a custom `command!` macro to simplify and reduce duplicate code.
 - The `MainframeProvider` struct provides functions that utilize one or more lower-level calls to the `CommandExecutor`, allowing for more complex operations.
-- The `ClientInterface` uses the `CommandExecutor` trait, so implementing your own and providing an instance to the `MainframeProvider` allows you to work with your own terminal emulator.
+- The `StreamCommandExecutor` uses the `CommandExecutor` trait, so implementing your own and providing an instance to the `MainframeProvider` allows you to work with your own terminal emulator.
   - Create custom `CommandBuilder` implementations via the `command!` macro as needed
 
 ## Usage
 
 There are currently two levels of abstraction implemented in this library.
 
-### ClientAddress, Client, and ClientInterface
+### TerminalConfiguration, Client, and CommandExecutor
 
-To use this lower-level abstraction, simply create an instance of `ClientAddress`, spawn a `Client`, and then a `ClientInterface`. After which you will be able to `execute` `CommandBuilder` instances on the `ClientInterface` that interact with the spawned x3270 client.
+To use this lower-level abstraction, simply create an instance of `TerminalConfiguration`, spawn a `Client` with an implementation of `ClientSpawner`, and create a `CommandExecutor`. After which you will be able to `execute` `CommandBuilder` instances on the `CommandExecutor` that interact with the spawned client.
 
 ### MainframeProvider
 
