@@ -235,16 +235,16 @@ mod tests {
             });
     }
 
-    fn get_provider() -> MainframeProvider<ClientInterface> {
-        let client_address = ClientAddress::new("localhost:3270", 3271);
-        let temp_client = client_address.try_start_client_process().expect("The client process should be startable.");
+    fn get_provider() -> MainframeProvider<StreamCommandExecutor> {
+        let terminal_configuration = TerminalConfiguration::new("localhost:3270", "localhost:3271");
+        let temp_client = X3270ClientSpawner::spawn(&terminal_configuration).unwrap();
 
         // wait a second
         std::thread::sleep(Duration::from_secs(1));
 
         let _ = std::mem::replace(&mut *cached_client.lock().unwrap(), Some(temp_client));
-        let client_interface = client_address.try_connect_to_client_process().expect("The client interface should be able to connect to the client process.");
-        MainframeProvider::new(client_interface)
+        let command_executor = StreamCommandExecutor::connect_to_client_process(&terminal_configuration.client_address).unwrap();
+        MainframeProvider::new(command_executor)
     }
 
     #[test]

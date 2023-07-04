@@ -630,55 +630,47 @@ impl Client {
 }
 
 
-pub struct ClientAddress {
-    mainframe_address: String,
-    client_address: String
+#[derive(Debug)]
+pub struct TerminalConfiguration {
+    pub mainframe_address: String,
+    pub client_address: String
 }
 
-pub struct ClientInterface {
-    stream: TcpStream,
-    client_address: String
-}
-
-impl ClientAddress {
-    pub fn new<T: Into<String>>(mainframe_address: T, client_port: u16) -> Self {
-        ClientAddress {
-            mainframe_address: mainframe_address.into(),
-            client_address: format!("localhost:{}", client_port)
+impl TerminalConfiguration {
+    pub fn new(mainframe_address: &str, client_address: &str) -> Self {
+        TerminalConfiguration {
+            mainframe_address: String::from(mainframe_address),
+            client_address: String::from(client_address)
         }
     }
 }
 
-impl ClientAddress {
-    pub fn try_start_client_process(&self) -> Option<Client> {
-        let process_result = std::process::Command::new("x3270")
+pub trait ClientSpawner {
+    fn spawn(terminal_configuration: &TerminalConfiguration) -> Option<Client>;
+}
+
+pub struct X3270ClientSpawner {}
+
+impl ClientSpawner for X3270ClientSpawner {
+    fn spawn(terminal_configuration: &TerminalConfiguration) -> Option<Client> {
+        let client_result = std::process::Command::new("x3270")
             .arg("-scriptport")
-            .arg(&self.client_address)
+            .arg(&terminal_configuration.client_address)
             .arg("-model")
             .arg("3279-4")
-            .arg(&self.mainframe_address)
-            .spawn();
-        match process_result {
-            Ok(process) => {
-                Some(Client { process })
+            .arg(&terminal_configuration.mainframe_address)
+            .spawn()
+            .map(|process| {
+                Client {
+                    process
+                }
+            });
+        match client_result {
+            Ok(client) => {
+                Some(client)
             },
             Err(error) => {
-                println!("try_start_client_process: error starting client process with mainframe address {} and client address {} via error: {}", self.mainframe_address, self.client_address, error);
-                None
-            }
-        }
-    }
-    pub fn try_connect_to_client_process(&self) -> Option<ClientInterface> {
-        let stream_result = TcpStream::connect(&self.client_address);
-        match stream_result {
-            Ok(stream) => {
-                Some(ClientInterface {
-                    stream,
-                    client_address: self.client_address.clone()
-                })
-            },
-            Err(error) => {
-                println!("try_connect_to_client_process: error connecting to {} via error: {}", self.mainframe_address, error);
+                println!("try_start_client_process: error starting client process with terminal configuration {:?} via error: {}", terminal_configuration, error);
                 None
             }
         }
@@ -686,26 +678,40 @@ impl ClientAddress {
 }
 
 pub trait CommandExecutor {
-    fn get_stream(&mut self) -> &mut TcpStream;
+    fn connect_to_client_process(client_address: &str) -> Option<Self> where Self:Sized;
+    fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> ExecutionResult<TOutput>;
+    fn disconnect(&mut self);
+}
+
+pub struct StreamCommandExecutor {
+    stream: TcpStream
+}
+
+impl CommandExecutor for StreamCommandExecutor {
+    fn connect_to_client_process(client_address: &str) -> Option<Self> {
+        let stream_result = TcpStream::connect(client_address);
+        match stream_result {
+            Ok(stream) => {
+                Some(StreamCommandExecutor {
+                    stream
+                })
+            },
+            Err(error) => {
+                println!("try_connect_to_client_process: error connecting to {} via error: {}", client_address, error);
+                None
+            }
+        }
+    }
     fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> ExecutionResult<TOutput> {
-        let mut stream = self.get_stream();
-        command.execute(&mut stream)
+        command.execute(&mut self.stream)
     }
     fn disconnect(&mut self) {
-        let stream = self.get_stream();
-        let shutdown_result = stream.shutdown(std::net::Shutdown::Both);
+        let shutdown_result = self.stream.shutdown(std::net::Shutdown::Both);
         if let Err(shutdown_error) = shutdown_result {
             println!("Failed to disconnect via shutdown: {}", shutdown_error);
         }
     }
 }
-
-impl CommandExecutor for ClientInterface {
-    fn get_stream(&mut self) -> &mut TcpStream {
-        &mut self.stream
-    }
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -729,10 +735,10 @@ mod tests {
     fn start_client_then_wait_then_kill() {
         init();
 
-        let client_address = ClientAddress::new("localhost:3270", 3271);
+        let terminal_configuration = TerminalConfiguration::new("localhost:3270", "localhost:3271");
         
         // spawn client
-        let client = client_address.try_start_client_process();
+        let client = X3270ClientSpawner::spawn(&terminal_configuration);
         assert!(client.is_some());
         let mut client = client.unwrap();
         
@@ -750,10 +756,10 @@ mod tests {
     fn start_client_then_read_screen_then_kill() {
         init();
 
-        let client_address = ClientAddress::new("localhost:3270", 3271);
+        let terminal_configuration = TerminalConfiguration::new("localhost:3270", "localhost:3271");
         
         // spawn client
-        let client = client_address.try_start_client_process();
+        let client = X3270ClientSpawner::spawn(&terminal_configuration);
         assert!(client.is_some());
         let mut client = client.unwrap();
         
@@ -762,7 +768,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(1));
 
         // create interface
-        let interface = client_address.try_connect_to_client_process();
+        let interface = StreamCommandExecutor::connect_to_client_process(&terminal_configuration.client_address);
 
         if interface.is_none() {
             // kill client
@@ -806,10 +812,10 @@ mod tests {
     fn start_client_then_next_field_then_previous_field_then_kill() {
         init();
 
-        let client_address = ClientAddress::new("localhost:3270", 3271);
+        let terminal_configuration = TerminalConfiguration::new("localhost:3270", "localhost:3271");
         
         // spawn client
-        let client = client_address.try_start_client_process();
+        let client = X3270ClientSpawner::spawn(&terminal_configuration);
         assert!(client.is_some());
         let mut client = client.unwrap();
         
@@ -818,7 +824,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(1));
 
         // create interface
-        let interface = client_address.try_connect_to_client_process();
+        let interface = StreamCommandExecutor::connect_to_client_process(&terminal_configuration.client_address);
 
         if interface.is_none() {
             // kill client
@@ -878,10 +884,10 @@ mod tests {
     fn start_client_then_end_of_field_then_kill() {
         init();
 
-        let client_address = ClientAddress::new("localhost:3270", 3271);
+        let terminal_configuration = TerminalConfiguration::new("localhost:3270", "localhost:3271");
         
         // spawn client
-        let client = client_address.try_start_client_process();
+        let client = X3270ClientSpawner::spawn(&terminal_configuration);
         assert!(client.is_some());
         let mut client = client.unwrap();
         
@@ -890,7 +896,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(1));
 
         // create interface
-        let interface = client_address.try_connect_to_client_process();
+        let interface = StreamCommandExecutor::connect_to_client_process(&terminal_configuration.client_address);
 
         if interface.is_none() {
             // kill client
@@ -931,10 +937,10 @@ mod tests {
     fn start_client_then_get_cursor_position_then_kill() {
         init();
 
-        let client_address = ClientAddress::new("localhost:3270", 3271);
+        let terminal_configuration = TerminalConfiguration::new("localhost:3270", "localhost:3271");
         
         // spawn client
-        let client = client_address.try_start_client_process();
+        let client = X3270ClientSpawner::spawn(&terminal_configuration);
         assert!(client.is_some());
         let mut client = client.unwrap();
         
@@ -943,7 +949,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(1));
 
         // create interface
-        let interface = client_address.try_connect_to_client_process();
+        let interface = StreamCommandExecutor::connect_to_client_process(&terminal_configuration.client_address);
 
         if interface.is_none() {
             // kill client
