@@ -107,23 +107,24 @@ struct KeyPress {
     is_alt_key_held: bool
 }
 
-trait ReadOnlyMainframeProvider {
+trait ImmutableMainframeProvider {
     fn get_screen_text(&self) -> Vec<String>;
     fn get_text_at_location(&self, x: u8, y: u8, length: u8) -> String;
     fn get_fields_count(&self) -> u8;
+    fn get_field_vector(&self) -> Option<(u8, u8, u8)>;
 }
 
-trait MainframeProvider: ReadOnlyMainframeProvider {
+trait MutableMainframeProvider: ImmutableMainframeProvider {
     fn set_text_at_location(&self, x: u8, y: u8, text: &str) -> ();
-    fn send_key_press(&self, key_press: &KeyPress) -> ();
+    fn move_to_field_index(&self, index: u8) -> ();
 }
 
-trait Screen<T: MainframeProvider> {
+trait Screen<T: MutableMainframeProvider> {
     fn is_active(&self, provider: T) -> bool;
     fn try_navigate_to(&self, provider: &T) -> bool;
 }
 
-struct NavigateOperation<'a, T: MainframeProvider> {
+struct NavigateOperation<'a, T: MutableMainframeProvider> {
     screen: &'a dyn Screen<T>
 }
 
@@ -149,51 +150,51 @@ struct KeyPressOperation {
     key_press: KeyPress
 }
 
-enum Operation<'a, T: MainframeProvider> {
+enum Operation<'a, T: MutableMainframeProvider> {
     Navigate(NavigateOperation<'a, T>),
     Store(StoreOperation),
     Set(SetOperation),
-    KeyPress(KeyPressOperation)
+    //KeyPress(KeyPressOperation)
 }
 
 trait OperationCondition {
     fn is_true(&self) -> bool;
 }
 
-struct SingleOperationTreeNode<'a, T: MainframeProvider> {
+struct SingleOperationTreeNode<'a, T: MutableMainframeProvider> {
     operation: Operation<'a, T>,
     next: Option<Box<OperationTreeNode<'a, T>>>
 }
 
-impl<'a, T: MainframeProvider> SingleOperationTreeNode<'a, T> {
+impl<'a, T: MutableMainframeProvider> SingleOperationTreeNode<'a, T> {
     pub fn new(operation: Operation<'a, T>, next: Option<Box<OperationTreeNode<'a, T>>>) -> Self {
         SingleOperationTreeNode { operation, next }
     }
 }
 
-struct ConditionalOperationTreeNode<'a, T: MainframeProvider> {
-    condition: fn(&HashMap<String, String>, &dyn ReadOnlyMainframeProvider) -> bool,
+struct ConditionalOperationTreeNode<'a, T: MutableMainframeProvider> {
+    condition: fn(&HashMap<String, String>, &dyn ImmutableMainframeProvider) -> bool,
     consequent: Box<OperationTreeNode<'a, T>>,
     alternative: Option<Box<OperationTreeNode<'a, T>>>
 }
 
-impl<'a, T: MainframeProvider> ConditionalOperationTreeNode<'a, T> {
-    pub fn new(condition: fn(&HashMap<String, String>, &dyn ReadOnlyMainframeProvider) -> bool, consequent: Box<OperationTreeNode<'a, T>>, alternative: Option<Box<OperationTreeNode<'a, T>>>) -> Self {
+impl<'a, T: MutableMainframeProvider> ConditionalOperationTreeNode<'a, T> {
+    pub fn new(condition: fn(&HashMap<String, String>, &dyn ImmutableMainframeProvider) -> bool, consequent: Box<OperationTreeNode<'a, T>>, alternative: Option<Box<OperationTreeNode<'a, T>>>) -> Self {
         ConditionalOperationTreeNode { condition, consequent, alternative }
     }
 }
 
-enum OperationTreeNode<'a, T: MainframeProvider> {
+enum OperationTreeNode<'a, T: MutableMainframeProvider> {
     Single(SingleOperationTreeNode<'a, T>),
     Conditional(ConditionalOperationTreeNode<'a, T>)
 }
 
-struct OperationContext<T: MainframeProvider> {
+struct OperationContext<T: MutableMainframeProvider> {
     value_per_variable_name: Rc<RefCell<HashMap<String, String>>>,
     phantom_mainframe_provider: PhantomData<T>,
 }
 
-impl<T: MainframeProvider> OperationContext<T> {
+impl<T: MutableMainframeProvider> OperationContext<T> {
     pub fn new(value_per_variable_name: HashMap<String, String>) -> Self {
         OperationContext {
             value_per_variable_name: Rc::new(RefCell::new(value_per_variable_name)),
@@ -229,9 +230,9 @@ impl<T: MainframeProvider> OperationContext<T> {
                     }
                 }
             },
-            Operation::KeyPress(operation) => {
-                provider.send_key_press(&operation.key_press);
-            }
+            //Operation::KeyPress(operation) => {
+            //    provider.send_key_press(&operation.key_press);
+            //}
         }
     }
     pub fn process_operations<'a>(&'a self, provider: &'a T, operations: &OperationTreeNode<'a, T>) {
@@ -246,13 +247,201 @@ impl<T: MainframeProvider> OperationContext<T> {
                 },
                 OperationTreeNode::Conditional(operation) => {
                     let borrowed_value_per_variable_name = self.value_per_variable_name.borrow();
-                    if (operation.condition)(&borrowed_value_per_variable_name, provider as &dyn ReadOnlyMainframeProvider) {
+                    if (operation.condition)(&borrowed_value_per_variable_name, provider as &dyn ImmutableMainframeProvider) {
                         current_operation = Some(operation.consequent.as_ref());
                     }
                     else if let Some(operation) = &operation.alternative {
                         current_operation = Some(operation.as_ref());
                     }
                 }
+            }
+        }
+    }
+}
+struct MainframeProvider {
+    client_interface: RefCell<ClientInterface>
+}
+
+impl MainframeProvider {
+    pub fn new(client_interface: ClientInterface) -> Self {
+        MainframeProvider {
+            client_interface: RefCell::new(client_interface)
+        }
+    }
+}
+
+impl ImmutableMainframeProvider for MainframeProvider {
+    fn get_screen_text(&self) -> Vec<String> {
+        let lines = self.client_interface
+            .borrow_mut()
+            .execute(GetTextRangeCommand::new(0, 0, 80, 24))
+            .expect("The lines should be returned from the client interface");
+        lines
+            .into_iter()
+            .map(|mut line| {
+                line.pop();
+                line
+            })
+            .collect()
+    }
+    fn get_text_at_location(&self, x: u8, y: u8, length: u8) -> String {
+        let line = self.client_interface
+            .borrow_mut()
+            .execute(GetTextCommand::new(y, x, length))
+            .expect("The line should have been returned from the client interface.");
+        line
+    }
+    fn get_fields_count(&self) -> u8 {
+        // get the current cursor position so that it can be restored at the end
+        let current_cursor_position = self.client_interface
+            .borrow_mut()
+            .execute(GetCursorCommand::new())
+            .expect("The client interface should have returned the cursor position.");
+
+        // move to the first field
+        self.client_interface
+            .borrow_mut()
+            .execute(MoveCursorToFirstFieldCommand::new())
+            .expect("The client interface should be able to find the first field.");
+
+        let mut fields_count = 0;
+
+        // TODO determine what should be done if there are no fields on the screen
+
+        // get the first field cursor position so that we can determine when we've cycled back
+        let first_field_cursor_position = self.client_interface
+            .borrow_mut()
+            .execute(GetCursorCommand::new())
+            .expect("The client interface should be able to get the current cursor position.");
+
+        let mut current_field_cursor_position: Option<(u8, u8)> = None;
+        while current_field_cursor_position.is_none() || current_field_cursor_position.unwrap() != first_field_cursor_position {
+
+            fields_count += 1;
+
+            // move to the next field
+            self.client_interface
+                .borrow_mut()
+                .execute(MoveCursorToNextFieldCommand::new())
+                .expect("The client interface should be able to move the cursor to the next field.");
+
+            // get the current field cursor position
+            current_field_cursor_position = Some(self.client_interface
+                .borrow_mut()
+                .execute(GetCursorCommand::new())
+                .expect("The client interface should be able to get the current cursor position."));
+        }
+
+        // move the cursor back to the original position
+        self.client_interface
+            .borrow_mut()
+            .execute(MoveCursorCommand::new(current_cursor_position.0, current_cursor_position.1))
+            .expect("The client nterface should be able to set the cursor position back to the original position.");
+
+        fields_count
+    }
+    fn get_field_vector(&self) -> Option<(u8, u8, u8)> {
+        // get the current cursor position
+        let original_cursor_position = self.client_interface
+            .borrow_mut()
+            .execute(GetCursorCommand::new())
+            .expect("The client interface should have returned the cursor position.");
+
+        // move the cursor to the front of the field by going forward and backward
+        self.client_interface
+            .borrow_mut()
+            .execute(MoveCursorToNextFieldCommand::new())
+            .expect("The client interface should be permitted to move to the next field.");
+        self.client_interface
+            .borrow_mut()
+            .execute(MoveCursorToPreviousFieldCommand::new())
+            .expect("The client interface should be permitted to move back to the original field.");
+
+        // get the cursor position as the beginning of the field
+        let starting_cursor_position = self.client_interface
+            .borrow_mut()
+            .execute(GetCursorCommand::new())
+            .expect("The client interface should return the starting position of the field.");
+
+        if original_cursor_position.0 != starting_cursor_position.1 {
+            // the original cursor position and the field are not on the same row
+
+            // restore the cursor position
+            self.client_interface
+                .borrow_mut()
+                .execute(MoveCursorCommand::new(original_cursor_position.0, original_cursor_position.1))
+                .expect("The client interface should permit restoring the cursor to the original position.");
+
+            return None;
+        }
+        // move the cursor to the end of the field
+        self.client_interface
+            .borrow_mut()
+            .execute(MoveCursorToFieldEndCommand::new())
+            .expect("The client interface should be able to move to the ending field position.");
+
+        // get the cursor position at the end of the field
+        let ending_cursor_position = self.client_interface
+            .borrow_mut()
+            .execute(GetCursorCommand::new())
+            .expect("The client interface should return the ending position of the field.");
+
+        // restore the cursor position
+        self.client_interface
+            .borrow_mut()
+            .execute(MoveCursorCommand::new(original_cursor_position.0, original_cursor_position.1))
+            .expect("The client interface should permit restoring the cursor to the original position.");
+
+        // if the original cursor position is contained within the bounds, return the vector
+        if starting_cursor_position.1 <= original_cursor_position.1 && original_cursor_position.1 <= ending_cursor_position.1 {
+            return Some((starting_cursor_position.0, starting_cursor_position.1, (ending_cursor_position.1 - starting_cursor_position.1 + 1)));
+        }
+
+        // return None otherwise
+        None
+    }
+}
+
+impl MutableMainframeProvider for MainframeProvider {
+    fn set_text_at_location(&self, x: u8, y: u8, text: &str) -> () {
+        // get the current cursor position so that it can be restored at the end
+        let current_cursor_position = self.client_interface
+            .borrow_mut()
+            .execute(GetCursorCommand::new())
+            .expect("The client interface should have returned the cursor position.");
+        
+        // move the cursor to the appropriate location
+        self.client_interface
+            .borrow_mut()
+            .execute(MoveCursorCommand::new(y, x))
+            .expect("The client interface should have moved the cursor to where the text needs to go.");
+
+        // set the text to the screen
+        self.client_interface
+            .borrow_mut()
+            .execute(SetTextCommand::new(String::from(text)))
+            .expect("The client interface should have set the text.");
+
+        // restore the cursor to its original location
+        self.client_interface
+            .borrow_mut()
+            .execute(MoveCursorCommand::new(current_cursor_position.0, current_cursor_position.1))
+            .expect("The client interface should move the cursor back to where it started.");
+    }
+    fn move_to_field_index(&self, index: u8) -> () {
+        // move to the 0th field
+        self.client_interface
+            .borrow_mut()
+            .execute(MoveCursorToFirstFieldCommand::new())
+            .expect("The client interface should move the cursor back to the first field initially.");
+
+        if index > 0 {
+            // iterate as needed
+            for _ in 0..index {
+                self.client_interface
+                    .borrow_mut()
+                    .execute(MoveCursorToNextFieldCommand::new())
+                    .expect("The client interface should permit moving the cursor to the next field.");
             }
         }
     }
@@ -264,91 +453,10 @@ mod tests {
 
     use super::*;
 
-    struct TestMainframeProvider {
-        client_interface: RefCell<ClientInterface>
-    }
-
-    impl ReadOnlyMainframeProvider for TestMainframeProvider {
-        fn get_screen_text(&self) -> Vec<String> {
-            let lines = self.client_interface
-                .borrow_mut()
-                .execute(GetTextRangeCommand::new(0, 0, 80, 24))
-                .expect("The lines should be returned from the client interface");
-            lines
-                .into_iter()
-                .map(|mut line| {
-                    line.pop();
-                    line
-                })
-                .collect()
-        }
-        fn get_text_at_location(&self, x: u8, y: u8, length: u8) -> String {
-            let line = self.client_interface
-                .borrow_mut()
-                .execute(GetTextCommand::new(y, x, length))
-                .expect("The line should have been returned from the client interface.");
-            line
-        }
-        fn get_fields_count(&self) -> u8 {
-            // get the current cursor position so that it can be restored at the end
-            let current_cursor_position = self.client_interface
-                .borrow_mut()
-                .execute(GetCursorCommand::new())
-                .expect("The client interface should have returned the cursor position.");
-
-            // move to the first field
-            self.client_interface
-                .borrow_mut()
-                .execute(MoveCursorToFirstFieldCommand::new())
-                .expect("The client interface should be able to find the first field.");
-
-            // get the first field cursor position so that we can determine when we've cycled back
-
-            // move to the next field
-
-            // get the current field cursor position
-
-            // check if we have cycled back to the first field
-
-            todo!()
-        }
-    }
-
-    impl MainframeProvider for TestMainframeProvider {
-        fn set_text_at_location(&self, x: u8, y: u8, text: &str) -> () {
-            // get the current cursor position so that it can be restored at the end
-            let current_cursor_position = self.client_interface
-                .borrow_mut()
-                .execute(GetCursorCommand::new())
-                .expect("The client interface should have returned the cursor position.");
-            
-            // move the cursor to the appropriate location
-            self.client_interface
-                .borrow_mut()
-                .execute(MoveCursorCommand::new(y, x))
-                .expect("The client interface should have moved the cursor to where the text needs to go.");
-
-            // set the text to the screen
-            self.client_interface
-                .borrow_mut()
-                .execute(SetTextCommand::new(String::from(text)))
-                .expect("The client interface should have set the text.");
-
-            // restore the cursor to its original location
-            self.client_interface
-                .borrow_mut()
-                .execute(MoveCursorCommand::new(current_cursor_position.0, current_cursor_position.1))
-                .expect("The client interface should move the cursor back to where it started.");
-        }
-
-        fn send_key_press(&self, key_press: &KeyPress) -> () {
-            todo!()
-        }
-    }
 
     #[test]
     fn initialize_context() {
-        let operation_context = OperationContext::<TestMainframeProvider>::new(HashMap::from([
+        let operation_context = OperationContext::<MainframeProvider>::new(HashMap::from([
             (String::from("test"), String::from("something"))
         ]));
     }
