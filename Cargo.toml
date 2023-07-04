@@ -1,6 +1,6 @@
 [package]
 name = "rs3270"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Austin Heller"]
 description = "This library abstracts over interacting with the x3270 client. Simply provide the mainframe address and the scripting port for the client in order to immediately interact with the x3270 client programmatically."

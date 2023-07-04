@@ -3,31 +3,31 @@
 use std::cell::RefCell;
 use crate::client_interface::*;
 
-trait ImmutableMainframeProvider {
+pub trait ImmutableMainframeProvider {
     fn get_screen_text(&self) -> Vec<String>;
     fn get_text_at_location(&self, x: u8, y: u8, length: u8) -> String;
     fn get_fields_count(&self) -> u8;
     fn get_field_vector(&self) -> Option<(u8, u8, u8)>;
 }
 
-trait MutableMainframeProvider: ImmutableMainframeProvider {
+pub trait MutableMainframeProvider: ImmutableMainframeProvider {
     fn set_text_at_location(&self, x: u8, y: u8, text: &str) -> ();
     fn move_to_field_index(&self, index: u8) -> ();
 }
 
-struct MainframeProvider {
-    client_interface: RefCell<ClientInterface>
+pub struct MainframeProvider<T: CommandExecutor> {
+    client_interface: RefCell<T>
 }
 
-impl MainframeProvider {
-    pub fn new(client_interface: ClientInterface) -> Self {
+impl<T: CommandExecutor> MainframeProvider<T> {
+    pub fn new(command_executor: T) -> Self {
         MainframeProvider {
-            client_interface: RefCell::new(client_interface)
+            client_interface: RefCell::new(command_executor)
         }
     }
 }
 
-impl ImmutableMainframeProvider for MainframeProvider {
+impl<T: CommandExecutor> ImmutableMainframeProvider for MainframeProvider<T> {
     fn get_screen_text(&self) -> Vec<String> {
         let lines = self.client_interface
             .borrow_mut()
@@ -159,7 +159,7 @@ impl ImmutableMainframeProvider for MainframeProvider {
     }
 }
 
-impl MutableMainframeProvider for MainframeProvider {
+impl<T: CommandExecutor> MutableMainframeProvider for MainframeProvider<T> {
     fn set_text_at_location(&self, x: u8, y: u8, text: &str) -> () {
         // get the current cursor position so that it can be restored at the end
         let current_cursor_position = self.client_interface
@@ -235,7 +235,7 @@ mod tests {
             });
     }
 
-    fn get_provider() -> MainframeProvider {
+    fn get_provider() -> MainframeProvider<ClientInterface> {
         let client_address = ClientAddress::new("localhost:3270", 3271);
         let temp_client = client_address.try_start_client_process().expect("The client process should be startable.");
 

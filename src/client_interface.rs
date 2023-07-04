@@ -685,17 +685,27 @@ impl ClientAddress {
     }
 }
 
-impl ClientInterface {
-    pub fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> ExecutionResult<TOutput> {
-        return command.execute(&mut self.stream);
+pub trait CommandExecutor {
+    fn get_stream(&mut self) -> &mut TcpStream;
+    fn execute<TOutput>(&mut self, command: impl CommandBuilder<TOutput>) -> ExecutionResult<TOutput> {
+        let mut stream = self.get_stream();
+        command.execute(&mut stream)
     }
-    pub fn disconnect(&mut self) {
-        let shutdown_result = self.stream.shutdown(std::net::Shutdown::Both);
+    fn disconnect(&mut self) {
+        let stream = self.get_stream();
+        let shutdown_result = stream.shutdown(std::net::Shutdown::Both);
         if let Err(shutdown_error) = shutdown_result {
             println!("Failed to disconnect via shutdown: {}", shutdown_error);
         }
     }
 }
+
+impl CommandExecutor for ClientInterface {
+    fn get_stream(&mut self) -> &mut TcpStream {
+        &mut self.stream
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
