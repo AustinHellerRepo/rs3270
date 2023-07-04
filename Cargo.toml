@@ -1,5 +1,5 @@
 [package]
-name = "mainframe_processor"
+name = "rs3270"
 version = "0.1.0"
 edition = "2021"
 
