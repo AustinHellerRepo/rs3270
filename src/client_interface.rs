@@ -509,7 +509,7 @@ command!(GetTextRange, [
         height: u8
     ],
     command: {
-        format!("Ascii({},{},{},{})", row, column, height - 1, width - 1)
+        format!("Ascii({},{},{},{})", row, column, height, width)
     },
     output => lines: Vec<String>,
     data: (
